@@ -180,7 +180,7 @@ def _run_pipeline(req: ChatRequest) -> dict:
             "debug": debug,
         }
 
-    if p["should_ask_for_clarification"](router_result) and not req.manual_domains:
+    if p["should_ask_for_clarification"](router_result, req.query) and not req.manual_domains:
         return {
             "final_answer": p["get_clarification_message"](router_result),
             "intent_type": router_result.intent_type,

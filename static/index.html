@@ -3,130 +3,196 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>EduPilot — AI Educational Tutor</title>
+  <title>EduPilot — IU AI Tutor</title>
   <link rel="stylesheet" href="/static/style.css" />
-  <!-- Markdown renderer -->
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-  <!-- Syntax highlighting -->
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css" />
   <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
 </head>
 <body>
-  <!-- ── Sidebar ─────────────────────────────────────── -->
-  <aside class="sidebar" id="sidebar">
-    <div class="sidebar-header">
-      <span class="logo">🎓</span>
-      <div>
-        <div class="brand">EduPilot</div>
-        <div class="brand-sub">Multi-Agent Educational AI</div>
-      </div>
-      <button class="icon-btn sidebar-toggle" id="sidebarToggle" title="Toggle sidebar">☰</button>
+
+  <!-- Top Nav -->
+  <header class="topnav">
+    <span class="topnav-logo">🎓</span>
+    <span class="topnav-brand">EduPilot</span>
+    <span class="topnav-sub">Indiana University · AI Tutor</span>
+    <div class="topnav-model">
+      <span class="topnav-model-dot"></span>
+      LLaMA 3.3 · 70B Versatile
     </div>
+  </header>
 
-    <!-- Domains -->
-    <div class="section-title">Domains</div>
-    <div id="domainsList" class="domains-list"></div>
+  <div class="app-body">
 
-    <!-- Model settings -->
-    <div class="section-title" style="margin-top:16px">Settings</div>
-    <div class="settings-panel">
-      <label class="field-label">Model</label>
-      <select id="modelSelect" class="select"></select>
+    <!-- Sidebar -->
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-scroll">
 
-      <label class="field-label">Retrieval Top-K <span id="topKVal" class="val-badge">5</span></label>
-      <input type="range" id="topK" min="2" max="10" value="5" class="slider" />
+        <!-- 1. SESSIONS on top -->
+        <div class="sidebar-section">
+          <div class="sidebar-section-title">
+            Conversations
+            <button class="icon-action" id="newSessionBtn" title="New chat">+</button>
+          </div>
+          <div class="sessions-list" id="sessionsList"></div>
+          <button class="new-session-btn" id="newSessionBtn2">+ New Conversation</button>
+        </div>
 
-      <label class="field-label">Rerank Top-K <span id="rerankKVal" class="val-badge">3</span></label>
-      <input type="range" id="rerankK" min="1" max="5" value="3" class="slider" />
+        <!-- 2. KNOWLEDGE BASE STATUS -->
+        <div class="sidebar-section">
+          <div class="sidebar-section-title">Knowledge Bases</div>
+          <div id="domainStatusList" class="domain-status-list"></div>
+        </div>
 
-      <label class="field-label">Confidence <span id="confVal" class="val-badge">0.20</span></label>
-      <input type="range" id="conf" min="0" max="1" step="0.05" value="0.20" class="slider" />
+        <!-- 3. SETTINGS at bottom — NO model selector -->
+        <div class="sidebar-section">
+          <div class="sidebar-section-title">Settings</div>
+          <div class="settings-group">
+            <div>
+              <div class="field-label">Retrieval Top-K <span id="topKVal" class="val-badge">5</span></div>
+              <input type="range" id="topK" min="2" max="10" value="5" class="slider" />
+            </div>
+            <div>
+              <div class="field-label">Rerank Top-K <span id="rerankKVal" class="val-badge">3</span></div>
+              <input type="range" id="rerankK" min="1" max="5" value="3" class="slider" />
+            </div>
+            <div>
+              <div class="field-label">Confidence <span id="confVal" class="val-badge">0.20</span></div>
+              <input type="range" id="conf" min="0" max="1" step="0.05" value="0.20" class="slider" />
+            </div>
+            <div class="toggle-row">
+              <span class="field-label" style="margin:0">Verify Answers</span>
+              <label class="toggle"><input type="checkbox" id="verifyToggle" checked /><span class="toggle-knob"></span></label>
+            </div>
+            <div class="toggle-row">
+              <span class="field-label" style="margin:0">Debug Panel</span>
+              <label class="toggle"><input type="checkbox" id="debugToggle" /><span class="toggle-knob"></span></label>
+            </div>
+          </div>
+        </div>
 
-      <div class="toggle-row">
-        <label class="field-label" style="margin:0">Verification</label>
-        <label class="toggle"><input type="checkbox" id="verifyToggle" checked /><span class="toggle-knob"></span></label>
       </div>
-      <div class="toggle-row">
-        <label class="field-label" style="margin:0">Debug Panel</label>
-        <label class="toggle"><input type="checkbox" id="debugToggle" /><span class="toggle-knob"></span></label>
-      </div>
-    </div>
+    </aside>
 
-    <!-- Upload -->
-    <div class="section-title" style="margin-top:16px">Upload Documents</div>
-    <div class="upload-box" id="uploadBox">
-      <select id="uploadDomain" class="select"></select>
-      <label class="upload-label" for="fileInput">
-        <span>📎 Drop files or click to browse</span>
-        <span class="upload-hint">PDF · TXT · MD · DOCX</span>
-      </label>
-      <input type="file" id="fileInput" multiple accept=".pdf,.txt,.md,.docx" hidden />
-      <div id="fileList" class="file-list"></div>
-      <button class="btn btn-secondary" id="uploadBtn">Index Documents</button>
-      <div id="uploadStatus" class="upload-status"></div>
-    </div>
+    <!-- Main -->
+    <main class="main">
 
-    <!-- Sessions -->
-    <div class="section-title" style="margin-top:16px">
-      Sessions
-      <button class="icon-btn" id="newSessionBtn" title="New session">＋</button>
-    </div>
-    <div id="sessionsList" class="sessions-list"></div>
-  </aside>
+      <!-- Tab bar -->
+      <nav class="tab-bar">
+        <button class="tab active" data-tab="chat">Chat</button>
+        <button class="tab" data-tab="kb">Knowledge Base</button>
+        <button class="tab" data-tab="eval">Evaluation</button>
+        <button class="toggle-sidebar" id="sidebarToggle" title="Toggle sidebar">☰</button>
+      </nav>
 
-  <!-- ── Main ────────────────────────────────────────── -->
-  <main class="main">
-    <!-- Tab bar -->
-    <nav class="tab-bar">
-      <button class="tab active" data-tab="chat">💬 Chat</button>
-      <button class="tab" data-tab="kb">📚 Knowledge Base</button>
-      <button class="tab" data-tab="eval">🔬 Evaluation</button>
-    </nav>
+      <!-- CHAT TAB -->
+      <div class="tab-content active" id="tab-chat">
+        <div class="chat-wrap">
 
-    <!-- ── Chat Tab ── -->
-    <div class="tab-content active" id="tab-chat">
-      <div class="chat-header">
-        <h2>Ask EduPilot</h2>
-        <div class="sample-prompts" id="samplePrompts"></div>
-      </div>
-      <div class="messages" id="messages">
-        <div class="welcome-msg">
-          <div class="welcome-icon">🎓</div>
-          <h3>Welcome to EduPilot</h3>
-          <p>Ask anything about <strong>Applied Machine Learning</strong>, <strong>Applied Database Technologies</strong>, <strong>Statistics</strong>, or <strong>Large Language Models</strong>.</p>
+          <div class="chat-panel">
+            <div class="chat-top">
+              <div class="chat-title">Ask anything about your courses</div>
+              <div class="sample-prompts" id="samplePrompts"></div>
+            </div>
+
+            <div class="messages" id="messages">
+              <div class="welcome-msg">
+                <div class="welcome-icon">🎓</div>
+                <h3>Welcome to EduPilot</h3>
+                <p>Your AI tutor for <strong>Applied Machine Learning</strong>,
+                   <strong>Applied Database Technologies</strong>,
+                   <strong>Statistics</strong>, and
+                   <strong>Large Language Models</strong>.</p>
+              </div>
+            </div>
+
+            <div class="input-area">
+              <div class="input-attachments" id="inputAttachments" hidden></div>
+              <div class="input-row">
+                <button class="attach-btn" id="attachBtn" title="Attach document">📎</button>
+                <textarea id="queryInput" placeholder="Ask a question about your coursework…" rows="1"></textarea>
+                <button class="send-btn" id="sendBtn">↑</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Document Preview Panel — right side -->
+          <div class="preview-panel" id="previewPanel">
+            <div class="preview-header">
+              <span>📄</span>
+              <span class="preview-title" id="previewTitle">Document Preview</span>
+              <button class="preview-close" id="previewClose">✕</button>
+            </div>
+            <div class="preview-meta" id="previewMeta"></div>
+            <div class="preview-body" id="previewBody">
+              <div class="preview-placeholder">
+                <div style="font-size:36px">📂</div>
+                <div>Attach a document to preview it here</div>
+              </div>
+            </div>
+          </div>
+
         </div>
       </div>
-      <div class="input-area">
-        <textarea id="queryInput" placeholder="Ask a question…" rows="1"></textarea>
-        <button class="btn btn-primary" id="sendBtn">Send ↑</button>
+
+      <!-- KNOWLEDGE BASE TAB -->
+      <div class="tab-content" id="tab-kb">
+        <div class="kb-content" id="kbContent"></div>
       </div>
-    </div>
 
-    <!-- ── Knowledge Base Tab ── -->
-    <div class="tab-content" id="tab-kb">
-      <h2>Knowledge Base</h2>
-      <div id="kbContent" class="kb-grid"></div>
-    </div>
-
-    <!-- ── Evaluation Tab ── -->
-    <div class="tab-content" id="tab-eval">
-      <h2>Evaluation Suite</h2>
-      <p class="muted">Run built-in test cases to validate routing, retrieval, synthesis, and edge-case handling.</p>
-      <div class="eval-toolbar">
-        <button class="btn btn-primary" id="runAllBtn">▶ Run All Tests</button>
-        <div class="eval-select-row">
-          <select id="singleTcSelect" class="select" style="flex:1"></select>
-          <button class="btn btn-secondary" id="runSingleBtn">▶ Run</button>
+      <!-- EVALUATION TAB -->
+      <div class="tab-content" id="tab-eval">
+        <div class="eval-content">
+          <div>
+            <div class="page-title">Evaluation Suite</div>
+            <div class="page-sub">Run built-in test cases to validate routing, retrieval, and answer quality.</div>
+          </div>
+          <div class="eval-toolbar">
+            <button class="btn btn-primary" id="runAllBtn">Run All Tests</button>
+            <div class="eval-select-row">
+              <select id="singleTcSelect" class="select"></select>
+              <button class="btn btn-secondary btn-sm" id="runSingleBtn">Run</button>
+            </div>
+          </div>
+          <div id="evalProgress" hidden>
+            <div class="progress-bar"><div id="progressFill" class="progress-fill" style="width:0%"></div></div>
+            <div id="progressLabel" class="progress-label">Running…</div>
+          </div>
+          <div id="evalSummary" class="eval-summary" hidden></div>
+          <div id="evalResults" class="eval-results-list"></div>
         </div>
       </div>
-      <div id="evalProgress" class="eval-progress" hidden>
-        <div class="progress-bar"><div id="progressFill" class="progress-fill"></div></div>
-        <div id="progressLabel" class="progress-label">Running…</div>
+
+    </main>
+  </div>
+
+  <!-- Upload Modal -->
+  <div id="uploadModal" class="modal-overlay" hidden>
+    <div class="modal-box">
+      <div class="modal-header">
+        <span class="modal-title">📎 Attach Document</span>
+        <button class="modal-close-btn" id="modalClose">✕</button>
       </div>
-      <div id="evalSummary" hidden class="eval-summary"></div>
-      <div id="evalResults" class="eval-results"></div>
+      <div class="modal-body">
+        <label class="field-label" style="display:block;margin-bottom:6px">Add to subject:</label>
+        <select id="uploadDomain" class="select" style="margin-bottom:14px;width:100%"></select>
+        <div class="upload-drop-zone" id="uploadDropZone">
+          <div style="font-size:28px">📂</div>
+          <div style="font-size:14px;color:var(--text-muted);margin-top:6px">
+            Drop files here or <span class="browse-link" id="browseLink">browse</span>
+          </div>
+          <div style="font-size:12px;color:var(--text-light);margin-top:4px">PDF · TXT · MD · DOCX</div>
+        </div>
+        <input type="file" id="modalFileInput" multiple accept=".pdf,.txt,.md,.docx" hidden />
+        <div id="modalFileList" class="modal-file-list"></div>
+        <div id="modalStatus" class="modal-status"></div>
+        <div class="modal-actions">
+          <button class="btn btn-secondary btn-sm" id="modalCancelBtn">Cancel</button>
+          <button class="btn btn-primary btn-sm" id="modalIndexBtn">Index &amp; Attach</button>
+        </div>
+      </div>
     </div>
-  </main>
+  </div>
 
   <script src="/static/app.js"></script>
 </body>

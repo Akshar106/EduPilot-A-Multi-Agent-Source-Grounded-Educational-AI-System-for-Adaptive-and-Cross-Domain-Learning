@@ -182,9 +182,19 @@ def classify_query(
 # Quick helpers for the app layer
 # ---------------------------------------------------------------------------
 
-def should_ask_for_clarification(result: RouterResult) -> bool:
+def should_ask_for_clarification(result: RouterResult, query: str = "") -> bool:
+    # Hard override: if keyword fallback detects domains, never ask for clarification.
+    # This prevents the LLM from being overly cautious on clear questions.
+    if result.domains:
+        return False
+    if query:
+        kw_result = _keyword_classify(query)
+        if kw_result.domains:
+            return False
+    # Only ask if truly no domains detected AND query is very short/vague
     return result.needs_clarification or (
         result.is_course_related and not result.domains
+        and len(query.split()) < 5
     )
 
 

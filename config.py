@@ -151,9 +151,9 @@ DEFAULT_MODEL: str = "llama-3.3-70b-versatile"
 EMBEDDING_MODEL: str = "all-MiniLM-L6-v2"
 
 LLM_MAX_TOKENS_CLASSIFY: int = 1024
-LLM_MAX_TOKENS_GENERATE: int = 4096
-LLM_MAX_TOKENS_SYNTH: int = 6144
-LLM_MAX_TOKENS_VERIFY: int = 6144
+LLM_MAX_TOKENS_GENERATE: int = 8192   # long detailed answers
+LLM_MAX_TOKENS_SYNTH: int = 8192      # comprehensive cross-domain synthesis
+LLM_MAX_TOKENS_VERIFY: int = 8192     # room for full revised answers
 
 # ---------------------------------------------------------------------------
 # Verification
