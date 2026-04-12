@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>EduPilot — AI Educational Tutor</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <!-- Markdown renderer -->
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <!-- Syntax highlighting -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+</head>
+<body>
+  <!-- ── Sidebar ─────────────────────────────────────── -->
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-header">
+      <span class="logo">🎓</span>
+      <div>
+        <div class="brand">EduPilot</div>
+        <div class="brand-sub">Multi-Agent Educational AI</div>
+      </div>
+      <button class="icon-btn sidebar-toggle" id="sidebarToggle" title="Toggle sidebar">☰</button>
+    </div>
+
+    <!-- Domains -->
+    <div class="section-title">Domains</div>
+    <div id="domainsList" class="domains-list"></div>
+
+    <!-- Model settings -->
+    <div class="section-title" style="margin-top:16px">Settings</div>
+    <div class="settings-panel">
+      <label class="field-label">Model</label>
+      <select id="modelSelect" class="select"></select>
+
+      <label class="field-label">Retrieval Top-K <span id="topKVal" class="val-badge">5</span></label>
+      <input type="range" id="topK" min="2" max="10" value="5" class="slider" />
+
+      <label class="field-label">Rerank Top-K <span id="rerankKVal" class="val-badge">3</span></label>
+      <input type="range" id="rerankK" min="1" max="5" value="3" class="slider" />
+
+      <label class="field-label">Confidence <span id="confVal" class="val-badge">0.20</span></label>
+      <input type="range" id="conf" min="0" max="1" step="0.05" value="0.20" class="slider" />
+
+      <div class="toggle-row">
+        <label class="field-label" style="margin:0">Verification</label>
+        <label class="toggle"><input type="checkbox" id="verifyToggle" checked /><span class="toggle-knob"></span></label>
+      </div>
+      <div class="toggle-row">
+        <label class="field-label" style="margin:0">Debug Panel</label>
+        <label class="toggle"><input type="checkbox" id="debugToggle" /><span class="toggle-knob"></span></label>
+      </div>
+    </div>
+
+    <!-- Upload -->
+    <div class="section-title" style="margin-top:16px">Upload Documents</div>
+    <div class="upload-box" id="uploadBox">
+      <select id="uploadDomain" class="select"></select>
+      <label class="upload-label" for="fileInput">
+        <span>📎 Drop files or click to browse</span>
+        <span class="upload-hint">PDF · TXT · MD · DOCX</span>
+      </label>
+      <input type="file" id="fileInput" multiple accept=".pdf,.txt,.md,.docx" hidden />
+      <div id="fileList" class="file-list"></div>
+      <button class="btn btn-secondary" id="uploadBtn">Index Documents</button>
+      <div id="uploadStatus" class="upload-status"></div>
+    </div>
+
+    <!-- Sessions -->
+    <div class="section-title" style="margin-top:16px">
+      Sessions
+      <button class="icon-btn" id="newSessionBtn" title="New session">＋</button>
+    </div>
+    <div id="sessionsList" class="sessions-list"></div>
+  </aside>
+
+  <!-- ── Main ────────────────────────────────────────── -->
+  <main class="main">
+    <!-- Tab bar -->
+    <nav class="tab-bar">
+      <button class="tab active" data-tab="chat">💬 Chat</button>
+      <button class="tab" data-tab="kb">📚 Knowledge Base</button>
+      <button class="tab" data-tab="eval">🔬 Evaluation</button>
+    </nav>
+
+    <!-- ── Chat Tab ── -->
+    <div class="tab-content active" id="tab-chat">
+      <div class="chat-header">
+        <h2>Ask EduPilot</h2>
+        <div class="sample-prompts" id="samplePrompts"></div>
+      </div>
+      <div class="messages" id="messages">
+        <div class="welcome-msg">
+          <div class="welcome-icon">🎓</div>
+          <h3>Welcome to EduPilot</h3>
+          <p>Ask anything about <strong>Applied Machine Learning</strong>, <strong>Applied Database Technologies</strong>, <strong>Statistics</strong>, or <strong>Large Language Models</strong>.</p>
+        </div>
+      </div>
+      <div class="input-area">
+        <textarea id="queryInput" placeholder="Ask a question…" rows="1"></textarea>
+        <button class="btn btn-primary" id="sendBtn">Send ↑</button>
+      </div>
+    </div>
+
+    <!-- ── Knowledge Base Tab ── -->
+    <div class="tab-content" id="tab-kb">
+      <h2>Knowledge Base</h2>
+      <div id="kbContent" class="kb-grid"></div>
+    </div>
+
+    <!-- ── Evaluation Tab ── -->
+    <div class="tab-content" id="tab-eval">
+      <h2>Evaluation Suite</h2>
+      <p class="muted">Run built-in test cases to validate routing, retrieval, synthesis, and edge-case handling.</p>
+      <div class="eval-toolbar">
+        <button class="btn btn-primary" id="runAllBtn">▶ Run All Tests</button>
+        <div class="eval-select-row">
+          <select id="singleTcSelect" class="select" style="flex:1"></select>
+          <button class="btn btn-secondary" id="runSingleBtn">▶ Run</button>
+        </div>
+      </div>
+      <div id="evalProgress" class="eval-progress" hidden>
+        <div class="progress-bar"><div id="progressFill" class="progress-fill"></div></div>
+        <div id="progressLabel" class="progress-label">Running…</div>
+      </div>
+      <div id="evalSummary" hidden class="eval-summary"></div>
+      <div id="evalResults" class="eval-results"></div>
+    </div>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

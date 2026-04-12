@@ -246,6 +246,7 @@ def chunk_text(
     page_number: Optional[int] = None,
     chunk_size: int = CHUNK_SIZE,
     chunk_overlap: int = CHUNK_OVERLAP,
+    start_idx: int = 0,          # global offset so IDs are unique across pages
 ) -> list[DocumentChunk]:
     """
     Split text into overlapping word-based chunks.
@@ -258,7 +259,7 @@ def chunk_text(
 
     chunks: list[DocumentChunk] = []
     start = 0
-    idx = 0
+    idx = start_idx
 
     while start < len(words):
         end = min(start + chunk_size, len(words))
@@ -295,19 +296,22 @@ def load_and_chunk_file(
     chunk_size: int = CHUNK_SIZE,
     chunk_overlap: int = CHUNK_OVERLAP,
 ) -> list[DocumentChunk]:
-    """Load a file and return all its chunks."""
+    """Load a file and return all its chunks with globally unique IDs."""
     segments = load_document(file_path)
     all_chunks: list[DocumentChunk] = []
+    global_idx = 0          # never resets — keeps IDs unique across all pages
     for text, page_num in segments:
-        chunks = chunk_text(
+        page_chunks = chunk_text(
             text=text,
             source_file=file_path,
             domain=domain,
             page_number=page_num,
             chunk_size=chunk_size,
             chunk_overlap=chunk_overlap,
+            start_idx=global_idx,
         )
-        all_chunks.extend(chunks)
+        global_idx += len(page_chunks)
+        all_chunks.extend(page_chunks)
     return all_chunks
 
 

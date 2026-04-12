@@ -34,8 +34,8 @@ PINECONE_API_KEY: str  = os.getenv("PINECONE_API_KEY", "")
 # GCP us-central1 = Pinecone free-tier region; compatible with Streamlit Cloud
 # ---------------------------------------------------------------------------
 PINECONE_INDEX_NAME: str = os.getenv("PINECONE_INDEX_NAME", "edupilot")
-PINECONE_CLOUD: str      = os.getenv("PINECONE_CLOUD", "gcp")
-PINECONE_REGION: str     = os.getenv("PINECONE_REGION", "us-central1")
+PINECONE_CLOUD: str      = os.getenv("PINECONE_CLOUD", "aws")
+PINECONE_REGION: str     = os.getenv("PINECONE_REGION", "us-east-1")
 EMBEDDING_DIMENSION: int = 384        # all-MiniLM-L6-v2 output dimension
 
 # ---------------------------------------------------------------------------
@@ -100,6 +100,26 @@ DOMAINS: dict[str, dict] = {
             "confidence interval", "t-test", "ANOVA", "regression", "correlation",
             "normal distribution", "Bayesian", "central limit theorem", "variance",
             "standard deviation", "mean", "median", "mode", "chi-square",
+        ],
+    },
+    "LLM": {
+        "name": "Large Language Models",
+        "abbr": "LLM",
+        "color": "#9C27B0",
+        "knowledge_base_path": str(KNOWLEDGE_BASE_DIR / "llm"),
+        "pinecone_namespace": "llm",
+        "description": (
+            "Transformer architecture, attention mechanisms, pretraining, instruction "
+            "tuning, RLHF, DPO, LoRA, prompting techniques, RAG pipelines, LLM agents, "
+            "hallucination, quantization, and LLM evaluation."
+        ),
+        "keywords": [
+            "LLM", "large language model", "transformer", "attention", "GPT", "BERT",
+            "LLaMA", "Mistral", "fine-tuning", "LoRA", "QLoRA", "RLHF", "DPO",
+            "prompt", "chain of thought", "RAG", "retrieval augmented generation",
+            "agent", "hallucination", "tokenization", "embedding", "pretraining",
+            "instruction tuning", "in-context learning", "few-shot", "zero-shot",
+            "quantization", "KV cache", "context window", "perplexity",
         ],
     },
 }
