@@ -58,7 +58,8 @@ body {
 .topnav-model-dot { width: 7px; height: 7px; border-radius: 50%; background: #4ade80; }
 
 /* ── App body ────────────────────────────────────────── */
-.app-body { display: flex; flex: 1; overflow: hidden; }
+.app-body { display: flex; flex: 1; overflow: hidden; min-height: 0; }
+
 
 /* ── Sidebar ─────────────────────────────────────────── */
 .sidebar {
@@ -111,18 +112,7 @@ body {
 }
 .new-session-btn:hover { border-color: var(--iu-crimson); color: var(--iu-crimson); background: var(--bg-active); }
 
-/* Domain status */
-.domain-status-list { display: flex; flex-direction: column; gap: 3px; }
-.domain-status-item {
-  display: flex; align-items: center; gap: 7px; padding: 5px 6px;
-  border-radius: var(--radius-sm); font-size: 13px;
-}
-.domain-color-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
-.domain-status-count {
-  margin-left: auto; font-size: 11px; color: var(--text-muted);
-  background: #fff; border: 1px solid var(--border);
-  padding: 1px 7px; border-radius: 10px;
-}
+
 
 /* Settings */
 .settings-group { display: flex; flex-direction: column; gap: 8px; padding: 2px 4px; }
@@ -158,7 +148,8 @@ body {
 .icon-action:hover { color: var(--iu-crimson); background: var(--bg-active); }
 
 /* ── Main area ───────────────────────────────────────── */
-.main { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-width: 0; }
+.main { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-width: 0; min-height: 0; }
+
 
 .tab-bar {
   display: flex; padding: 0 20px;
@@ -178,7 +169,8 @@ body {
 }
 .toggle-sidebar:hover { color: var(--iu-crimson); }
 
-.tab-content { display: none; flex: 1; overflow: hidden; flex-direction: column; }
+.tab-content { display: none; flex: 1; overflow: hidden; flex-direction: column; min-height: 0; }
+
 .tab-content.active { display: flex; }
 
 /* ── Chat layout ─────────────────────────────────────── */
@@ -389,11 +381,13 @@ textarea#queryInput::placeholder { color: var(--text-light); }
 /* ── Knowledge Base Tab ──────────────────────────────── */
 .kb-content {
   flex: 1; overflow-y: auto; padding: 24px;
-  display: flex; flex-direction: column; gap: 20px;
+  display: flex; flex-direction: column; gap: 20px; min-height: 0;
 }
+
 .kb-subject-card {
   background: #fff; border: 1px solid var(--border);
   border-radius: var(--radius); overflow: hidden; box-shadow: var(--shadow);
+  flex-shrink: 0;
 }
 .kb-card-header {
   display: flex; align-items: center; gap: 12px; padding: 16px 20px;
