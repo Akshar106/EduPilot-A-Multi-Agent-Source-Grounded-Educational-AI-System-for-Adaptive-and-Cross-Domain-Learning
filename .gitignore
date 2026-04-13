@@ -1,3 +1,9 @@
 .env
 knowledge_base/
 vector_stores/
+.claude/
+.DS_Store
+*.db
+*.db-shm
+*.db-wal
+__pycache__/
