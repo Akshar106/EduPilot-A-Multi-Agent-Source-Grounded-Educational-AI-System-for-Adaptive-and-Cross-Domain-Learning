@@ -138,6 +138,7 @@ class ChatRequest(BaseModel):
     confidence_threshold: float = DEFAULT_CONFIDENCE_THRESHOLD
     enable_verification: bool = True
     manual_domains: list[str] | None = None
+    attached_filenames: list[str] | None = None
     chat_history: list[dict] | None = None
 
 
@@ -165,8 +166,8 @@ def _run_pipeline(req: ChatRequest) -> dict:
 
     effective_domains = req.manual_domains if req.manual_domains else router_result.domains
 
-    # Early exits
-    if not router_result.is_course_related:
+    # Early exits — skip if the user manually supplied domains (e.g. via attachment)
+    if not router_result.is_course_related and not req.manual_domains:
         return {
             "final_answer": p["get_out_of_domain_message"](),
             "intent_type": router_result.intent_type,
@@ -212,7 +213,10 @@ def _run_pipeline(req: ChatRequest) -> dict:
         question = sq["question"]
 
         retriever = p["get_retriever"](domain)
-        raw_chunks = retriever.retrieve(question, top_k=req.top_k)
+        raw_chunks = retriever.retrieve(
+            question, top_k=req.top_k,
+            source_filter=req.attached_filenames or None,
+        )
         reranked = p["rerank"](
             query=question,
             chunks=raw_chunks,
