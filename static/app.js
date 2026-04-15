@@ -70,7 +70,6 @@ async function init() {
 
   buildSamplePrompts();
   buildUploadDomainSelect();
-  buildDomainStatusSidebar();
   await loadSessions();
 
   S.sessionId = storageGet('ep_session') || genUUID();
@@ -103,18 +102,6 @@ function buildSamplePrompts() {
 function buildUploadDomainSelect() {
   $('uploadDomain').innerHTML = Object.entries(S.config.domains)
     .map(([a, d]) => `<option value="${a}">${a} — ${d.name}</option>`).join('');
-}
-
-// ── Domain status in sidebar ───────────────────────────
-function buildDomainStatusSidebar() {
-  $('domainStatusList').innerHTML = Object.entries(S.config.domains).map(([abbr, d]) =>
-    `<div class="domain-status-item">
-       <span class="domain-color-dot" style="background:${d.color}"></span>
-       <span>${d.name}</span>
-       <span class="domain-status-count" id="dcount-${abbr}">—</span>
-     </div>`
-  ).join('');
-  refreshDomainCounts();
 }
 
 async function refreshDomainCounts() {
@@ -320,7 +307,12 @@ async function sendMessage() {
       rerank_top_k: parseInt($('rerankK').value),
       confidence_threshold: parseFloat($('conf').value),
       enable_verification: $('verifyToggle').checked,
-      manual_domains: null,
+      manual_domains: S.attachedFiles.length
+        ? [...new Set(S.attachedFiles.map(a => a.domain))]
+        : null,
+      attached_filenames: S.attachedFiles.length
+        ? S.attachedFiles.map(a => a.file.name)
+        : null,
       chat_history: [],
     });
     thinking.remove();
@@ -342,38 +334,49 @@ function renderAttachChips() {
   const container = $('inputAttachments');
   if (!S.attachedFiles.length) { container.hidden = true; container.innerHTML = ''; return; }
   container.hidden = false;
-  container.innerHTML = S.attachedFiles.map((f, i) =>
+  container.innerHTML = S.attachedFiles.map((a, i) =>
     `<div class="attach-chip" data-idx="${i}">
-       <span>📄 ${escHtml(f.name)}</span>
+       <span>📄 ${escHtml(a.file.name)} (${a.domain})</span>
        <button class="attach-chip-remove" data-idx="${i}" title="Remove">✕</button>
      </div>`
   ).join('');
 }
 
 // ── Preview panel ──────────────────────────────────────
-function openPreview(file, text) {
+function openPreview(file) {
   S.previewFile = file;
   $('previewTitle').textContent = file.name;
   $('previewMeta').textContent = `${fmtSize(file.size)} · ${file.name.split('.').pop().toUpperCase()}`;
-  $('previewBody').textContent = text || '(No preview available)';
+
+  const ext = file.name.split('.').pop().toLowerCase();
+  const body = $('previewBody');
+
+  if (ext === 'pdf') {
+    const url = URL.createObjectURL(file);
+    body.innerHTML = `<iframe src="${url}" style="width:100%;height:100%;border:none;"></iframe>`;
+    body.style.padding = '0';
+    body.style.whiteSpace = 'normal';
+  } else if (['txt', 'md'].includes(ext)) {
+    const reader = new FileReader();
+    reader.onload = e => {
+      body.textContent = e.target.result;
+      body.style.padding = '16px';
+      body.style.whiteSpace = 'pre-wrap';
+    };
+    reader.readAsText(file);
+  } else {
+    body.textContent = `[${ext.toUpperCase()} — preview not available]\n\nFile: ${file.name}\nSize: ${fmtSize(file.size)}`;
+    body.style.padding = '16px';
+    body.style.whiteSpace = 'pre-wrap';
+  }
+
   $('previewPanel').classList.add('open');
 }
 
 function closePreview() {
   $('previewPanel').classList.remove('open');
+  $('previewBody').style.padding = '16px';
   S.previewFile = null;
-}
-
-async function readFileText(file) {
-  const ext = file.name.split('.').pop().toLowerCase();
-  if (['txt', 'md'].includes(ext)) {
-    return new Promise(res => {
-      const r = new FileReader();
-      r.onload = e => res(e.target.result);
-      r.readAsText(file);
-    });
-  }
-  return `[${ext.toUpperCase()} — text preview not available in browser]\n\nFile: ${file.name}\nSize: ${fmtSize(file.size)}\n\nThis file has been indexed and is searchable via the chat.`;
 }
 
 // ── Upload modal ───────────────────────────────────────
@@ -420,12 +423,11 @@ async function doIndexAndAttach() {
     $('modalStatus').style.color = 'var(--success)';
     $('modalStatus').textContent = `✅ ${res.uploaded.length} file(s) indexed — ${total} chunks added.`;
 
-    for (const f of S.pendingFiles) S.attachedFiles.push(f);
+    for (const f of S.pendingFiles) S.attachedFiles.push({ file: f, domain: domain });
     renderAttachChips();
 
     if (S.pendingFiles.length > 0) {
-      const txt = await readFileText(S.pendingFiles[0]);
-      openPreview(S.pendingFiles[0], txt);
+      openPreview(S.pendingFiles[0]);
     }
     refreshDomainCounts();
     setTimeout(() => closeModal(), 1500);
@@ -690,8 +692,8 @@ function bindEvents() {
     const chip = e.target.closest('.attach-chip');
     if (chip) {
       const idx = parseInt(chip.dataset.idx);
-      const f = S.attachedFiles[idx];
-      if (f) { const txt = await readFileText(f); openPreview(f, txt); }
+      const a = S.attachedFiles[idx];
+      if (a) openPreview(a.file);
     }
   });
 

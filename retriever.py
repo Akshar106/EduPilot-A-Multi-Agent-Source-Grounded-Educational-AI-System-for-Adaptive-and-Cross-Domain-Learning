@@ -247,10 +247,13 @@ class DomainRetriever:
     # Retrieval
     # ------------------------------------------------------------------
 
-    def retrieve(self, query: str, top_k: int = 5) -> list[RetrievedChunk]:
+    def retrieve(self, query: str, top_k: int = 5, source_filter: list[str] | None = None) -> list[RetrievedChunk]:
         """
         Hybrid retrieval: Pinecone semantic search + BM25 keyword search,
         fused with Reciprocal Rank Fusion (RRF).
+
+        If *source_filter* is provided (list of filenames), only chunks whose
+        source_file path contains one of those filenames are returned.
         """
         if not self._initialized:
             raise RuntimeError("DomainRetriever not initialized. Call initialize() first.")
@@ -260,8 +263,27 @@ class DomainRetriever:
 
         n_candidates = min(top_k * 3, chunk_count_by_domain(self.domain))
 
-        sem_results = self._semantic_search(query, n_candidates)
-        bm25_results = self._bm25_search(query, n_candidates)
+        # Fetch more candidates when filtering to ensure enough results
+        fetch_k = n_candidates * 3 if source_filter else n_candidates
+        fetch_k = min(fetch_k, chunk_count_by_domain(self.domain))
+
+        sem_results = self._semantic_search(query, fetch_k)
+        bm25_results = self._bm25_search(query, fetch_k)
+
+        # Filter by source file if requested
+        if source_filter:
+            def _matches(meta: dict) -> bool:
+                sf = meta.get("source_file", "")
+                return any(fn in sf for fn in source_filter)
+
+            sem_filtered = [r for r in sem_results if _matches(r["meta"])]
+            bm25_filtered = [r for r in bm25_results if _matches(r["meta"])]
+
+            # Fall back to unfiltered if no matches (filename mismatch)
+            if sem_filtered or bm25_filtered:
+                sem_results = sem_filtered
+                bm25_results = bm25_filtered
+
         return self._reciprocal_rank_fusion(sem_results, bm25_results, top_k)
 
     def _semantic_search(self, query: str, top_k: int) -> list[dict]:
