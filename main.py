@@ -247,6 +247,7 @@ def _run_pipeline(req: ChatRequest) -> dict:
             domain=domain,
             retrieved_chunks=reranked,
             model=req.model,
+            chat_history=req.chat_history or [],
         )
         domain_answers.append(da)
 
@@ -417,7 +418,7 @@ async def chat(req: ChatRequest):
     db.ensure_session(req.session_id)
 
     # Persist user message
-    db.save_message(req.session_id, "user", req.query)
+    user_msg_id = db.save_message(req.session_id, "user", req.query)
     if len(db.get_session_messages(req.session_id)) == 1:
         db.update_session_title(req.session_id, req.query[:60])
 
@@ -429,7 +430,7 @@ async def chat(req: ChatRequest):
         raise HTTPException(500, f"Pipeline error: {exc}") from exc
 
     # Persist assistant message
-    db.save_message(
+    assistant_msg_id = db.save_message(
         session_id=req.session_id,
         role="assistant",
         content=result["final_answer"],
@@ -439,6 +440,8 @@ async def chat(req: ChatRequest):
         pipeline_meta=result.get("debug"),
     )
 
+    result["user_message_id"] = user_msg_id
+    result["assistant_message_id"] = assistant_msg_id
     return result
 
 
@@ -467,6 +470,13 @@ async def get_session(session_id: str):
 async def delete_session(session_id: str):
     db.delete_session(session_id)
     return {"deleted": session_id}
+
+
+@app.delete("/api/sessions/{session_id}/messages/{message_id}")
+async def truncate_from_message(session_id: str, message_id: int):
+    """Delete a message and all subsequent messages (used when editing a sent message)."""
+    db.delete_messages_from(session_id, message_id)
+    return {"truncated": True, "from_message_id": message_id}
 
 
 # ---------------------------------------------------------------------------

@@ -14,6 +14,7 @@ from config import DEFAULT_MODEL, DOMAINS, LLM_MAX_TOKENS_GENERATE, LLM_MAX_TOKE
 from prompts import (
     DOMAIN_AGENT_SYSTEM,
     DOMAIN_AGENT_USER,
+    DOMAIN_AGENT_USER_NO_CONTEXT,
     NO_EVIDENCE_RESPONSE,
     SYNTHESIZER_SYSTEM,
     SYNTHESIZER_USER,
@@ -31,21 +32,39 @@ from utils import (
 # Domain agent — one per sub-question
 # ---------------------------------------------------------------------------
 
+def _format_chat_history_block(chat_history: list[dict]) -> str:
+    """Format recent conversation turns into a prompt block, or return empty string."""
+    if not chat_history:
+        return ""
+    # Keep last 6 messages (3 pairs) to stay within token budget
+    recent = chat_history[-6:]
+    lines = ["\n--- CONVERSATION HISTORY (for context) ---"]
+    for msg in recent:
+        role = "Student" if msg.get("role") == "user" else "Assistant"
+        content = str(msg.get("content", "")).strip()
+        if content:
+            lines.append(f"{role}: {content}")
+    lines.append("--- END HISTORY ---\n")
+    return "\n".join(lines)
+
+
 def generate_domain_answer(
     sub_question: str,
     domain: str,
     retrieved_chunks: list[RetrievedChunk],
     model: str = DEFAULT_MODEL,
+    chat_history: list[dict] | None = None,
 ) -> DomainAnswer:
     """
-    Generate a grounded answer for a single sub-question using the domain's
-    retrieved evidence.
+    Generate an answer for a single sub-question, blending retrieved course
+    evidence with the model's own knowledge.
 
     Args:
         sub_question: The student's sub-question for this domain.
         domain: Domain identifier (e.g., "AML").
         retrieved_chunks: Reranked chunks from the domain retriever.
-        model: Claude model to use.
+        model: LLM model to use.
+        chat_history: Previous conversation turns for context.
 
     Returns:
         DomainAnswer with answer text, citations, and metadata.
@@ -54,11 +73,33 @@ def generate_domain_answer(
     domain_name = domain_cfg.get("name", domain)
     domain_abbr = domain_cfg.get("abbr", domain)
 
+    history_block = _format_chat_history_block(chat_history or [])
+
+    system_prompt = DOMAIN_AGENT_SYSTEM.format(
+        domain_name=domain_name,
+        domain_abbr=domain_abbr,
+    )
+
     if not retrieved_chunks:
+        # No course material found — answer from model's own knowledge
+        user_prompt = DOMAIN_AGENT_USER_NO_CONTEXT.format(
+            question=sub_question,
+            chat_history_block=history_block,
+        )
+        try:
+            answer_text = call_llm(
+                messages=[{"role": "user", "content": user_prompt}],
+                system=system_prompt,
+                model=model,
+                max_tokens=LLM_MAX_TOKENS_GENERATE,
+            )
+        except Exception as exc:
+            answer_text = NO_EVIDENCE_RESPONSE + f"\n\n_(Error: {exc})_"
+
         return DomainAnswer(
             domain=domain,
             sub_question=sub_question,
-            answer=NO_EVIDENCE_RESPONSE,
+            answer=answer_text,
             citations=[],
             retrieved_chunks=[],
             num_chunks_used=0,
@@ -67,12 +108,9 @@ def generate_domain_answer(
 
     chunks_text = format_chunks_for_prompt(retrieved_chunks)
 
-    system_prompt = DOMAIN_AGENT_SYSTEM.format(
-        domain_name=domain_name,
-        domain_abbr=domain_abbr,
-    )
     user_prompt = DOMAIN_AGENT_USER.format(
         question=sub_question,
+        chat_history_block=history_block,
         retrieved_chunks=chunks_text,
     )
 

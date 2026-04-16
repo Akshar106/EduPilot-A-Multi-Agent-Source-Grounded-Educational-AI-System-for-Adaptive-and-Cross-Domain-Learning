@@ -2,12 +2,16 @@
 
 // ── State ──────────────────────────────────────────────
 const S = {
-  sessionId:    null,
-  config:       null,
-  domainColors: {},
-  pendingFiles: [],   // files staged in the modal, not yet indexed
-  attachedFiles: [],  // files already indexed, shown as chips
-  previewFile:   null,
+  sessionId:          null,
+  config:             null,
+  domainColors:       {},
+  pendingFiles:       [],   // files staged in the modal, not yet indexed
+  attachedFiles:      [],  // files already indexed, shown as chips
+  previewFile:        null,
+  chatHistory:        [],   // [{role, content}] for current session context
+  editingMsgId:       null, // DB message id of the user message being edited
+  editingRemovedEls:  [],   // DOM elements removed during edit (for cancel restore)
+  editingHistorySnap: [],   // chatHistory snapshot before edit (for cancel restore)
 };
 
 // ── Helpers ────────────────────────────────────────────
@@ -167,12 +171,14 @@ async function startNewSession() {
 
 async function loadSessionMessages(sid) {
   clearMessages();
+  S.chatHistory = [];
   try {
     const data = await apiFetch(`/api/sessions/${sid}`);
     if (data.messages && data.messages.length > 0) {
       for (const m of data.messages) {
-        if (m.role === 'user') appendUserBubble(m.content);
+        if (m.role === 'user') appendUserBubble(m.content, m.id);
         else appendAssistantBubble(m.content, null, false);
+        S.chatHistory.push({ role: m.role, content: m.content });
       }
     } else {
       showWelcome();
@@ -200,11 +206,16 @@ function removeWelcome() {
   if (w) w.remove();
 }
 
-function appendUserBubble(text) {
+function appendUserBubble(text, msgId = null) {
   const d = document.createElement('div');
   d.className = 'message user';
-  d.innerHTML = `<div class="avatar">U</div>
-                 <div class="bubble">${escHtml(text)}</div>`;
+  if (msgId) d.dataset.msgId = msgId;
+  d.innerHTML = `
+    <div class="avatar">U</div>
+    <div class="bubble-wrap">
+      <div class="bubble">${escHtml(text)}</div>
+      <button class="edit-msg-btn" title="Edit message" data-text="${escHtml(text)}"${msgId ? ` data-msg-id="${msgId}"` : ''}>✏️</button>
+    </div>`;
   $('messages').appendChild(d);
   scrollBottom();
 }
@@ -294,7 +305,22 @@ async function sendMessage() {
   inp.value = '';
   inp.style.height = 'auto';
   $('sendBtn').disabled = true;
+  // If editing, truncate DB from that message onward (DOM already cleaned on edit click)
+  const truncateMsgId = S.editingMsgId;
+  S.editingMsgId = null;
+  S.editingRemovedEls = [];
+  S.editingHistorySnap = [];
+  const indicator = $('editIndicator');
+  if (indicator) indicator.remove();
+
   removeWelcome();
+
+  if (truncateMsgId) {
+    try {
+      await fetch(`/api/sessions/${S.sessionId}/messages/${truncateMsgId}`, { method: 'DELETE' });
+    } catch { /* best-effort */ }
+  }
+
   appendUserBubble(query);
   const thinking = appendThinking();
 
@@ -313,10 +339,26 @@ async function sendMessage() {
       attached_filenames: S.attachedFiles.length
         ? S.attachedFiles.map(a => a.file.name)
         : null,
-      chat_history: [],
+      chat_history: S.chatHistory.slice(-10),  // last 5 pairs
     });
     thinking.remove();
+
+    // Attach returned DB ids to the just-appended user bubble
+    if (result.user_message_id) {
+      const lastUser = $('messages').querySelector('.message.user:last-of-type');
+      if (lastUser) {
+        lastUser.dataset.msgId = result.user_message_id;
+        const editBtn = lastUser.querySelector('.edit-msg-btn');
+        if (editBtn) editBtn.dataset.msgId = result.user_message_id;
+      }
+    }
+
     appendAssistantBubble(result.final_answer, result, $('debugToggle').checked);
+
+    // Update in-memory chat history
+    S.chatHistory.push({ role: 'user', content: query });
+    S.chatHistory.push({ role: 'assistant', content: result.final_answer });
+
     await loadSessions();
     highlightActiveSession();
     refreshDomainCounts();
@@ -327,6 +369,26 @@ async function sendMessage() {
 
   $('sendBtn').disabled = false;
   inp.focus();
+}
+
+function cancelEditMode() {
+  // Restore removed DOM elements
+  if (S.editingRemovedEls.length) {
+    const container = $('messages');
+    for (const el of S.editingRemovedEls) container.appendChild(el);
+    S.editingRemovedEls = [];
+  }
+  // Restore chat history snapshot
+  if (S.editingHistorySnap.length) {
+    S.chatHistory = S.editingHistorySnap;
+    S.editingHistorySnap = [];
+  }
+  S.editingMsgId = null;
+  const indicator = $('editIndicator');
+  if (indicator) indicator.remove();
+  const inp = $('queryInput');
+  inp.value = '';
+  inp.style.height = 'auto';
 }
 
 // ── Attach chips ───────────────────────────────────────
@@ -651,6 +713,54 @@ function bindEvents() {
 
   // Sidebar toggle
   $('sidebarToggle').addEventListener('click', () => $('sidebar').classList.toggle('collapsed'));
+
+  // Edit message (delegated on message container)
+  $('messages').addEventListener('click', e => {
+    const btn = e.target.closest('.edit-msg-btn');
+    if (!btn) return;
+    const text = btn.dataset.text;
+    const msgId = btn.dataset.msgId ? parseInt(btn.dataset.msgId) : null;
+
+    // Snapshot history before removing anything (for cancel restore)
+    S.editingHistorySnap = S.chatHistory.slice();
+
+    // Remove the edited bubble and everything after it from the DOM immediately
+    const allMsgs = Array.from($('messages').querySelectorAll('.message'));
+    const editedEl = btn.closest('.message');
+    let removing = false;
+    S.editingRemovedEls = [];
+    for (const el of allMsgs) {
+      if (el === editedEl) removing = true;
+      if (removing) {
+        S.editingRemovedEls.push(el);
+        el.remove();
+      }
+    }
+
+    // Trim chatHistory to remove the edited turn and everything after
+    // Find how many messages remain in DOM and keep that many turns
+    const remaining = $('messages').querySelectorAll('.message').length;
+    S.chatHistory = S.chatHistory.slice(0, remaining);
+
+    S.editingMsgId = msgId;
+
+    // Fill input
+    const inp = $('queryInput');
+    inp.value = text;
+    inp.style.height = 'auto';
+    inp.style.height = Math.min(inp.scrollHeight, 140) + 'px';
+    inp.focus();
+
+    // Show editing indicator
+    let indicator = $('editIndicator');
+    if (!indicator) {
+      indicator = document.createElement('div');
+      indicator.id = 'editIndicator';
+      indicator.className = 'edit-indicator';
+      inp.parentNode.insertBefore(indicator, inp);
+    }
+    indicator.innerHTML = `✏️ Editing message &nbsp;<button onclick="cancelEditMode()" style="background:none;border:none;cursor:pointer;color:var(--text-muted);font-size:12px">✕ Cancel</button>`;
+  });
 
   // Send
   $('sendBtn').addEventListener('click', sendMessage);

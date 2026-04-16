@@ -112,12 +112,11 @@ Format: Always use markdown headers, bullet points, and emphasis. Never write a 
 """
 
 DOMAIN_AGENT_USER = """\
-A student has asked the following question. Write a detailed, comprehensive, well-formatted answer
-using the source material provided below.
+A student has asked the following question. Write a detailed, comprehensive, well-formatted answer.
 
 **Student Question:** {question}
-
---- SOURCE MATERIAL ---
+{chat_history_block}
+--- COURSE SOURCE MATERIAL ---
 {retrieved_chunks}
 --- END SOURCE MATERIAL ---
 
@@ -129,20 +128,38 @@ using the source material provided below.
    - Define it clearly in plain language
    - Explain how it works (the mechanism/intuition)
    - Give a concrete example or analogy
-   - Cite the source: [Source N]
+   - When drawing from course sources, cite them: [Source N]
 
 3. **Key Points** — Include a bullet-point summary of the most important takeaways.
 
-4. **Depth** — Where the sources permit, go beyond a surface definition:
+4. **Depth** — Go beyond a surface definition:
    - Explain trade-offs, edge cases, or common misconceptions
    - Connect concepts to each other where relevant
    - Include formulas, pseudocode, or examples if they help
 
-5. **References** — End with a `## References` section listing all cited sources.
+5. **Knowledge blending** — Use the course source material as your primary grounding (cite with
+   [Source N]). Where sources are silent or incomplete, supplement with your own expert knowledge —
+   clearly mark such additions with *(general knowledge)* so the student knows what comes from the
+   course material vs. broader knowledge.
 
-If the source material only partially covers the question, answer what you can from the sources
-(with citations) and clearly note what additional context would be needed for the rest.
-Never fabricate facts not present in the source material.\
+6. **References** — End with a `## References` section listing all cited course sources.\
+"""
+
+DOMAIN_AGENT_USER_NO_CONTEXT = """\
+A student has asked the following question. No course source material was found in the knowledge
+base, so answer entirely from your own expert knowledge.
+
+**Student Question:** {question}
+{chat_history_block}
+**Answer Requirements:**
+
+1. **Opening** — Start with a 1-2 sentence overview directly addressing the question.
+2. **Main Content** — Use `##` and `###` headers. Define, explain mechanism/intuition, give
+   concrete examples, include formulas or pseudocode where helpful.
+3. **Key Points** — Bullet-point summary of the most important takeaways.
+4. **Note** — End with a short note:
+   > *This answer is based on general expert knowledge. For course-specific details, check the
+   > uploaded lecture materials or ask your instructor.*\
 """
 
 # ---------------------------------------------------------------------------

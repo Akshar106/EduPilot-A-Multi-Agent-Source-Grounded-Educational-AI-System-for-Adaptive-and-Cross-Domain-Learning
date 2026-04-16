@@ -181,8 +181,8 @@ def save_message(
     detected_domains: list[str] | None = None,
     quality_score: float | None = None,
     pipeline_meta: dict | None = None,
-) -> None:
-    """Persist one chat turn. Also touches updated_at on the parent session."""
+) -> int:
+    """Persist one chat turn. Also touches updated_at on the parent session. Returns row id."""
     with _cursor() as cur:
         cur.execute(
             """
@@ -201,10 +201,12 @@ def save_message(
                 json.dumps(pipeline_meta, default=str) if pipeline_meta else None,
             ),
         )
+        row_id: int = cur.lastrowid  # type: ignore[assignment]
         cur.execute(
             "UPDATE chat_sessions SET updated_at=datetime('now') WHERE session_id=?",
             (session_id,),
         )
+    return row_id
 
 
 def get_session_messages(session_id: str) -> list[dict]:
@@ -223,6 +225,19 @@ def get_session_messages(session_id: str) -> list[dict]:
             d["pipeline_meta"] = json.loads(d["pipeline_meta"])
         result.append(d)
     return result
+
+
+def delete_messages_from(session_id: str, message_id: int) -> None:
+    """Delete a message and all subsequent messages in the session (for edit/re-send)."""
+    with _cursor() as cur:
+        cur.execute(
+            "DELETE FROM chat_messages WHERE session_id=? AND id >= ?",
+            (session_id, message_id),
+        )
+        cur.execute(
+            "UPDATE chat_sessions SET updated_at=datetime('now') WHERE session_id=?",
+            (session_id,),
+        )
 
 
 # ---------------------------------------------------------------------------
