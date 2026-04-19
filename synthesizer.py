@@ -16,6 +16,8 @@ from prompts import (
     DOMAIN_AGENT_USER,
     DOMAIN_AGENT_USER_NO_CONTEXT,
     NO_EVIDENCE_RESPONSE,
+    SS_AGENT_SYSTEM,
+    SS_AGENT_USER,
     SYNTHESIZER_SYSTEM,
     SYNTHESIZER_USER,
 )
@@ -205,6 +207,59 @@ def synthesize_answers(
         synthesized = "\n\n---\n\n".join(parts)
 
     return synthesized
+
+
+def generate_ss_answer(
+    question: str,
+    retrieved_chunks: list[RetrievedChunk],
+    model: str = DEFAULT_MODEL,
+    chat_history: list[dict] | None = None,
+) -> DomainAnswer:
+    """
+    Generate a strictly grounded answer for Self Study mode.
+    Never supplements with general knowledge — returns a refusal if context is insufficient.
+    """
+    history_block = _format_chat_history_block(chat_history or [])
+
+    if not retrieved_chunks:
+        return DomainAnswer(
+            domain="Self Study",
+            sub_question=question,
+            answer="I cannot find information about this in the selected document(s). Please upload relevant documents or remove the filter to search across all files.",
+            citations=[],
+            retrieved_chunks=[],
+            num_chunks_used=0,
+            no_evidence=True,
+        )
+
+    chunks_text = format_chunks_for_prompt(retrieved_chunks)
+
+    user_prompt = SS_AGENT_USER.format(
+        question=question,
+        chat_history_block=history_block,
+        retrieved_chunks=chunks_text,
+    )
+
+    try:
+        answer_text = call_llm(
+            messages=[{"role": "user", "content": user_prompt}],
+            system=SS_AGENT_SYSTEM,
+            model=model,
+            max_tokens=LLM_MAX_TOKENS_GENERATE,
+        )
+    except Exception as exc:
+        answer_text = f"Error generating answer: {exc}"
+
+    citations = [c.citation_label() for c in retrieved_chunks]
+    return DomainAnswer(
+        domain="Self Study",
+        sub_question=question,
+        answer=answer_text,
+        citations=citations,
+        retrieved_chunks=retrieved_chunks,
+        num_chunks_used=len(retrieved_chunks),
+        no_evidence=False,
+    )
 
 
 def _add_reference_list(answer_text: str, da: DomainAnswer) -> str:
