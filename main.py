@@ -65,7 +65,7 @@ def _get_pipeline() -> dict:
     )
     from query_splitter import split_query
     from reranker import rerank, score_summary
-    from synthesizer import generate_domain_answer, synthesize_answers
+    from synthesizer import generate_domain_answer, generate_ss_answer, synthesize_answers
     from verifier import get_final_answer, verify_answer
     from evaluation import TEST_CASES, run_all_evaluations, run_evaluation, summary_stats
 
@@ -80,6 +80,7 @@ def _get_pipeline() -> dict:
         "rerank": rerank,
         "score_summary": score_summary,
         "generate_domain_answer": generate_domain_answer,
+        "generate_ss_answer": generate_ss_answer,
         "synthesize_answers": synthesize_answers,
         "verify_answer": verify_answer,
         "get_final_answer": get_final_answer,
@@ -541,6 +542,233 @@ async def run_test_case(tc_id: str):
     result = await loop.run_in_executor(_executor, _run_single_eval, tc_id)
     if "error" in result and "not found" in result.get("error", ""):
         raise HTTPException(404, result["error"])
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Self Study — Pydantic models
+# ---------------------------------------------------------------------------
+class CreateSSSessionRequest(BaseModel):
+    name: str
+    description: str | None = None
+
+
+class SSChatRequest(BaseModel):
+    query: str
+    ss_session_id: str
+    model: str = DEFAULT_MODEL
+    top_k: int = DEFAULT_TOP_K
+    rerank_top_k: int = DEFAULT_RERANK_TOP_K
+    confidence_threshold: float = DEFAULT_CONFIDENCE_THRESHOLD
+    enable_verification: bool = True
+    chat_history: list[dict] | None = None
+    source_filter: list[str] | None = None   # filenames to restrict retrieval to
+
+
+# ---------------------------------------------------------------------------
+# Self Study — pipeline runner
+# ---------------------------------------------------------------------------
+def _run_ss_pipeline(req: SSChatRequest) -> dict:
+    from self_study_retriever import get_ss_retriever
+    p = _get_pipeline()
+
+    retriever = get_ss_retriever(req.ss_session_id)
+    if retriever.is_empty():
+        return {
+            "final_answer": "Please upload some documents to this study session first.",
+            "quality_score": 0.0,
+            "sources": [],
+        }
+
+    raw_chunks = retriever.retrieve(req.query, top_k=req.top_k, source_filter=req.source_filter or None)
+
+    if not raw_chunks and req.source_filter:
+        selected = ", ".join(req.source_filter)
+        return {
+            "final_answer": (
+                f"I couldn't find any information about this topic in the selected document(s): "
+                f"**{selected}**.\n\nTry selecting different documents from the filter bar, "
+                f"or remove the filter to search across all uploaded files."
+            ),
+            "quality_score": 0.0,
+            "verification_revised": False,
+            "sources": [],
+        }
+
+    reranked = p["rerank"](
+        query=req.query,
+        chunks=raw_chunks,
+        top_k=req.rerank_top_k,
+        confidence_threshold=max(req.confidence_threshold, 0.35),
+    )
+
+    if not reranked:
+        selected = ", ".join(req.source_filter) if req.source_filter else "the uploaded documents"
+        return {
+            "final_answer": (
+                f"I couldn't find sufficiently relevant information about this topic in {selected}. "
+                f"The document(s) may not cover this subject. Try selecting different documents or rephrasing your question."
+            ),
+            "quality_score": 0.0,
+            "verification_revised": False,
+            "sources": [],
+        }
+
+    da = p["generate_ss_answer"](
+        question=req.query,
+        retrieved_chunks=reranked,
+        model=req.model,
+        chat_history=req.chat_history or [],
+    )
+
+    verification = p["verify_answer"](
+        original_query=req.query,
+        sub_questions=[{"domain": "Self Study", "question": req.query}],
+        domain_answers=[da],
+        synthesized_answer=da.answer,
+        model=req.model,
+        enabled=req.enable_verification,
+    )
+    final_answer = p["get_final_answer"](da.answer, verification)
+
+    sources = list({c.source_file for c in reranked})
+    return {
+        "final_answer": final_answer,
+        "quality_score": verification.quality_score,
+        "verification_revised": verification.revised_answer is not None,
+        "sources": [Path(s).name for s in sources],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Self Study — Routes
+# ---------------------------------------------------------------------------
+@app.post("/api/self-study/sessions")
+async def ss_create_session(req: CreateSSSessionRequest):
+    ss_session_id = str(uuid.uuid4())
+    db.create_ss_session(ss_session_id, req.name.strip(), req.description)
+    return {"ss_session_id": ss_session_id, "name": req.name.strip()}
+
+
+@app.get("/api/self-study/sessions")
+async def ss_list_sessions():
+    return {"sessions": db.list_ss_sessions()}
+
+
+@app.get("/api/self-study/sessions/{ss_session_id}")
+async def ss_get_session(ss_session_id: str):
+    session = db.get_ss_session(ss_session_id)
+    if not session:
+        raise HTTPException(404, "Study session not found")
+    docs = db.list_ss_documents(ss_session_id)
+    messages = db.get_ss_messages(ss_session_id)
+    return {"session": session, "documents": docs, "messages": messages}
+
+
+@app.delete("/api/self-study/sessions/{ss_session_id}")
+async def ss_delete_session(ss_session_id: str):
+    from self_study_retriever import evict_ss_retriever, get_ss_retriever
+    session = db.get_ss_session(ss_session_id)
+    if not session:
+        raise HTTPException(404, "Study session not found")
+
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(
+        _executor,
+        lambda: get_ss_retriever(ss_session_id).cleanup(),
+    )
+    evict_ss_retriever(ss_session_id)
+    db.delete_ss_session(ss_session_id)
+    return {"deleted": ss_session_id}
+
+
+@app.post("/api/self-study/sessions/{ss_session_id}/upload")
+async def ss_upload_documents(
+    ss_session_id: str,
+    files: list[UploadFile] = File(...),
+):
+    from self_study_retriever import get_ss_retriever
+    session = db.get_ss_session(ss_session_id)
+    if not session:
+        raise HTTPException(404, "Study session not found")
+
+    upload_dir = Path(f"self_study_files/{ss_session_id}")
+    upload_dir.mkdir(parents=True, exist_ok=True)
+
+    saved_paths = []
+    file_sizes = {}
+    for uf in files:
+        raw = await uf.read()
+        dest = upload_dir / uf.filename
+        dest.write_bytes(raw)
+        saved_paths.append(str(dest))
+        file_sizes[uf.filename] = len(raw)
+
+    loop = asyncio.get_event_loop()
+    retriever = get_ss_retriever(ss_session_id)
+    index_results = await loop.run_in_executor(
+        _executor, retriever.add_documents, saved_paths
+    )
+
+    uploaded = []
+    for res in index_results:
+        fname = res["filename"]
+        n_chunks = res["chunks_indexed"]
+        db.save_ss_document(
+            ss_session_id=ss_session_id,
+            filename=fname,
+            file_type=Path(fname).suffix.lower(),
+            file_size_bytes=file_sizes.get(fname, 0),
+            chunk_count=n_chunks,
+        )
+        db.touch_ss_session(ss_session_id)
+        uploaded.append({"filename": fname, "chunks_indexed": n_chunks})
+
+    return {"uploaded": uploaded}
+
+
+@app.delete("/api/self-study/sessions/{ss_session_id}/documents/{doc_id}")
+async def ss_delete_document(ss_session_id: str, doc_id: int):
+    from self_study_retriever import get_ss_retriever
+    doc = db.get_ss_document(doc_id)
+    if not doc or doc["ss_session_id"] != ss_session_id:
+        raise HTTPException(404, "Document not found")
+
+    filename = doc["filename"]
+    loop = asyncio.get_event_loop()
+    retriever = get_ss_retriever(ss_session_id)
+    await loop.run_in_executor(_executor, retriever.remove_document, filename)
+
+    db.delete_ss_document_record(doc_id)
+    db.touch_ss_session(ss_session_id)
+
+    upload_path = Path(f"self_study_files/{ss_session_id}/{filename}")
+    if upload_path.exists():
+        upload_path.unlink()
+
+    return {"deleted": doc_id, "filename": filename}
+
+
+@app.post("/api/self-study/chat")
+async def ss_chat(req: SSChatRequest):
+    session = db.get_ss_session(req.ss_session_id)
+    if not session:
+        raise HTTPException(404, "Study session not found")
+
+    db.save_ss_message(req.ss_session_id, "user", req.query)
+
+    loop = asyncio.get_event_loop()
+    try:
+        result = await loop.run_in_executor(_executor, _run_ss_pipeline, req)
+    except Exception as exc:
+        raise HTTPException(500, f"Pipeline error: {exc}") from exc
+
+    db.save_ss_message(
+        ss_session_id=req.ss_session_id,
+        role="assistant",
+        content=result["final_answer"],
+        quality_score=result.get("quality_score"),
+    )
     return result
 
 

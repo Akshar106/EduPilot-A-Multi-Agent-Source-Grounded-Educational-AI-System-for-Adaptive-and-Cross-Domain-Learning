@@ -83,6 +83,7 @@ async function init() {
 
   loadEvalCases();
   renderKBTab();
+  ssLoadSessions();
   bindEvents();
 }
 
@@ -708,6 +709,7 @@ function bindEvents() {
       btn.classList.add('active');
       $(`tab-${btn.dataset.tab}`).classList.add('active');
       if (btn.dataset.tab === 'kb') renderKBTab();
+      if (btn.dataset.tab === 'ss') ssLoadSessions();
     });
   });
 
@@ -837,6 +839,551 @@ function bindEvents() {
   // Evaluation
   $('runAllBtn').addEventListener('click', runAllEvals);
   $('runSingleBtn').addEventListener('click', runSingleEval);
+
+  // Self Study
+  bindSSEvents();
+}
+
+// ══════════════════════════════════════════════════════
+// SELF STUDY
+// ══════════════════════════════════════════════════════
+
+const SS = {
+  activeSessionId: null,
+  chatHistory: [],
+  docs: [],              // current session's document list
+  activeFilters: null,   // null = all docs; array of filenames = filtered
+  pendingQuery: null,    // query waiting for clarification
+};
+
+// ── Session management ─────────────────────────────────
+async function ssLoadSessions() {
+  const data = await apiFetch('/api/self-study/sessions');
+  const list = $('ssSessionsList');
+  if (!data.sessions.length) {
+    list.innerHTML = '<div class="ss-sidebar-empty">No sessions yet.<br>Create one to get started.</div>';
+    return;
+  }
+  list.innerHTML = '';
+  for (const s of data.sessions) {
+    const isActive = s.ss_session_id === SS.activeSessionId;
+    const card = document.createElement('div');
+    card.className = 'ss-session-card' + (isActive ? ' active' : '');
+    card.dataset.sid = s.ss_session_id;
+    const age = ssRelativeTime(s.updated_at);
+    card.innerHTML = `
+      <div class="ss-session-card-name">
+        ${isActive ? '<div class="ss-session-active-dot"></div>' : ''}
+        ${escHtml(s.name)}
+      </div>
+      <div class="ss-session-card-meta">
+        <span>${s.doc_count} file${s.doc_count !== 1 ? 's' : ''}</span>
+        <span>·</span>
+        <span>${(s.total_chunks || 0).toLocaleString()} chunks</span>
+        <span>·</span>
+        <span>${age}</span>
+      </div>`;
+    card.addEventListener('click', () => ssSelectSession(s.ss_session_id, s.name));
+    list.appendChild(card);
+  }
+}
+
+function ssRelativeTime(isoStr) {
+  if (!isoStr) return '';
+  const now = new Date();
+  const then = new Date(isoStr.replace(' ', 'T') + 'Z');
+  const diffMs = now - then;
+  const mins = Math.floor(diffMs / 60000);
+  if (mins < 1)  return 'Just now';
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24)  return `${hrs}h ago`;
+  const days = Math.floor(hrs / 24);
+  return `${days}d ago`;
+}
+
+async function ssSelectSession(sid, name) {
+  SS.activeSessionId = sid;
+  SS.chatHistory = [];
+  SS.docs = [];
+  SS.activeFilters = null;
+  SS.pendingQuery = null;
+
+  $('ssEmpty').hidden = true;
+  $('ssActive').removeAttribute('hidden');
+  $('ssActiveName').textContent = name;
+
+  await ssLoadSessions();
+  await ssLoadSessionData(sid);
+}
+
+async function ssLoadSessionData(sid) {
+  const data = await apiFetch(`/api/self-study/sessions/${sid}`);
+
+  // Update header meta
+  const s = data.session;
+  const docs = data.documents || [];
+  const totalChunks = docs.reduce((n, d) => n + (d.chunk_count || 0), 0);
+  $('ssActiveMeta').textContent =
+    `${docs.length} file${docs.length !== 1 ? 's' : ''} · ${totalChunks.toLocaleString()} chunks indexed` +
+    (s.description ? ` · ${s.description}` : '');
+  $('ssDocCount').textContent = `${docs.length} file${docs.length !== 1 ? 's' : ''}`;
+
+  // Render documents
+  ssRenderDocs(docs);
+
+  // Render messages
+  const msgs = data.messages || [];
+  $('ssMessages').innerHTML = '';
+  if (!msgs.length) {
+    ssShowChatWelcome();
+  } else {
+    for (const m of msgs) {
+      if (m.role === 'user') ssAppendUserBubble(m.content);
+      else ssAppendAssistantBubble(m.content, null);
+      SS.chatHistory.push({ role: m.role, content: m.content });
+    }
+  }
+}
+
+function ssShowChatWelcome() {
+  $('ssMessages').innerHTML = `
+    <div class="ss-chat-welcome" id="ssChatWelcome">
+      <div class="welcome-icon" style="font-size:36px">📖</div>
+      <h4>Ready to study</h4>
+      <p>Upload documents on the left, then ask questions about them here.</p>
+    </div>`;
+}
+
+// ── Documents ──────────────────────────────────────────
+function ssGetFileIcon(ext) {
+  const icons = { pdf: '📄', txt: '📝', md: '📋', docx: '📘' };
+  return icons[(ext || '').replace('.', '')] || '📄';
+}
+
+function ssRenderDocs(docs) {
+  SS.docs = docs;
+  const list = $('ssDocsList');
+  if (!docs.length) { list.innerHTML = ''; ssRebuildFilterBar(); return; }
+
+  list.innerHTML = docs.map(d => {
+    const ext = (d.file_type || '').replace('.', '').toUpperCase() || 'FILE';
+    const size = d.file_size_bytes ? fmtSize(d.file_size_bytes) : '';
+    const hasChunks = d.chunk_count > 0;
+    const statusHtml = hasChunks
+      ? `<div class="ss-doc-status ready">✓ Ready — ${d.chunk_count} chunks</div>`
+      : `<div class="ss-doc-status warn">⚠️ No text extracted — file may be image-based or encrypted</div>`;
+    return `
+      <div class="ss-doc-card" data-doc-id="${d.id}">
+        <div class="ss-doc-card-top">
+          <span class="ss-doc-icon">${ssGetFileIcon(d.file_type)}</span>
+          <div class="ss-doc-info">
+            <div class="ss-doc-name" title="${escHtml(d.filename)}">${escHtml(d.filename)}</div>
+            <div class="ss-doc-details">${ext}${size ? ' · ' + size : ''}</div>
+          </div>
+          <button class="ss-doc-remove" data-doc-id="${d.id}" data-filename="${escHtml(d.filename)}" title="Remove document">✕</button>
+        </div>
+        ${statusHtml}
+      </div>`;
+  }).join('');
+
+  ssRebuildFilterBar();
+}
+
+function ssRebuildFilterBar() {
+  const docsWithChunks = (SS.docs || []).filter(d => d.chunk_count > 0);
+  const bar = $('ssFilterBar');
+  const chips = $('ssFilterChips');
+
+  if (docsWithChunks.length < 2) {
+    bar.hidden = true;
+    SS.activeFilters = null;
+    return;
+  }
+
+  bar.hidden = false;
+
+  // Initialise filters to all-selected if not set
+  if (SS.activeFilters === null) {
+    SS.activeFilters = docsWithChunks.map(d => d.filename);
+  } else {
+    // Prune any filters for docs that no longer exist
+    const names = new Set(docsWithChunks.map(d => d.filename));
+    SS.activeFilters = SS.activeFilters.filter(f => names.has(f));
+    if (!SS.activeFilters.length) SS.activeFilters = docsWithChunks.map(d => d.filename);
+  }
+
+  chips.innerHTML = docsWithChunks.map(d => {
+    const active = SS.activeFilters.includes(d.filename);
+    return `<div class="ss-filter-chip ${active ? 'active' : ''}" data-fname="${escHtml(d.filename)}" title="${escHtml(d.filename)}">
+      <span>${escHtml(d.filename)}</span>
+    </div>`;
+  }).join('');
+}
+
+async function ssRemoveDocument(docId, filename) {
+  if (!confirm(`Remove "${filename}" from this session?`)) return;
+  try {
+    await fetch(`/api/self-study/sessions/${SS.activeSessionId}/documents/${docId}`, { method: 'DELETE' });
+    await ssLoadSessionData(SS.activeSessionId);
+    await ssLoadSessions();
+  } catch (err) {
+    alert(`Error removing document: ${err.message}`);
+  }
+}
+
+// ── Upload ─────────────────────────────────────────────
+async function ssHandleUpload(files) {
+  if (!SS.activeSessionId || !files.length) return;
+  const valid = Array.from(files).filter(f => /\.(pdf|txt|md|docx)$/i.test(f.name));
+  if (!valid.length) { alert('Please upload PDF, TXT, MD, or DOCX files.'); return; }
+
+  const prog = $('ssUploadProgress');
+  const fill = $('ssProgressFill');
+  const label = $('ssProgressLabel');
+
+  prog.removeAttribute('hidden');
+  fill.style.width = '15%';
+  label.textContent = `Uploading ${valid.length} file${valid.length > 1 ? 's' : ''}…`;
+
+  // Show pending cards
+  const list = $('ssDocsList');
+  const pendingIds = valid.map((f, i) => `ss-pending-${i}`);
+  valid.forEach((f, i) => {
+    const el = document.createElement('div');
+    el.className = 'ss-pending-card';
+    el.id = pendingIds[i];
+    el.innerHTML = `<div class="ss-pending-spinner"></div><span>${escHtml(f.name)} — Indexing…</span>`;
+    list.prepend(el);
+  });
+
+  const fd = new FormData();
+  for (const f of valid) fd.append('files', f);
+
+  try {
+    fill.style.width = '40%';
+    label.textContent = 'Embedding & indexing…';
+
+    const res = await fetch(`/api/self-study/sessions/${SS.activeSessionId}/upload`, {
+      method: 'POST', body: fd,
+    }).then(r => r.json());
+
+    fill.style.width = '100%';
+    const total = res.uploaded.reduce((n, u) => n + u.chunks_indexed, 0);
+    label.textContent = `✅ ${res.uploaded.length} file(s) indexed — ${total} chunks added`;
+
+    setTimeout(async () => {
+      prog.hidden = true;
+      fill.style.width = '0%';
+      await ssLoadSessionData(SS.activeSessionId);
+      await ssLoadSessions();
+    }, 1800);
+
+  } catch (err) {
+    fill.style.width = '0%';
+    label.textContent = `❌ ${err.message}`;
+    setTimeout(() => { prog.hidden = true; }, 2500);
+  }
+
+  // Clean up pending cards
+  pendingIds.forEach(id => { const el = $(id); if (el) el.remove(); });
+  $('ssFileInput').value = '';
+}
+
+// ── Chat ───────────────────────────────────────────────
+function ssAppendUserBubble(text) {
+  const d = document.createElement('div');
+  d.className = 'message user';
+  d.innerHTML = `
+    <div class="avatar">U</div>
+    <div class="bubble-wrap">
+      <div class="bubble">${escHtml(text)}</div>
+    </div>`;
+  $('ssMessages').appendChild(d);
+  ssScrollBottom();
+}
+
+function ssAppendAssistantBubble(text, result) {
+  const d = document.createElement('div');
+  d.className = 'message assistant';
+
+  let meta = '';
+  if (result?.quality_score != null) {
+    const q = Math.round(result.quality_score * 100);
+    const icon = q >= 70 ? '✅' : q >= 40 ? '⚠️' : '❌';
+    meta += `<span class="quality-chip">${icon} Quality ${q}%</span>`;
+    if (result.verification_revised) meta += ` <span class="quality-chip">✏️ Revised</span>`;
+  }
+
+  let sourcesHtml = '';
+  if (result?.sources?.length) {
+    sourcesHtml = `<div class="ss-source-chips">
+      ${result.sources.map(s => `<span class="ss-source-chip">📄 ${escHtml(s)}</span>`).join('')}
+    </div>`;
+  }
+
+  d.innerHTML = `
+    <div class="avatar">📖</div>
+    <div style="flex:1;min-width:0">
+      ${meta ? `<div class="msg-meta">${meta}</div>` : ''}
+      <div class="bubble">${renderMd(text)}</div>
+      ${sourcesHtml}
+    </div>`;
+  $('ssMessages').appendChild(d);
+  hljs.highlightAll();
+  ssScrollBottom();
+}
+
+function ssAppendThinking() {
+  const d = document.createElement('div');
+  d.className = 'message assistant';
+  d.innerHTML = `<div class="avatar">📖</div>
+    <div class="thinking">
+      <div class="dot-bounce"><span></span><span></span><span></span></div>
+      Thinking…
+    </div>`;
+  $('ssMessages').appendChild(d);
+  ssScrollBottom();
+  return d;
+}
+
+function ssScrollBottom() {
+  const c = $('ssMessages');
+  requestAnimationFrame(() => { c.scrollTop = c.scrollHeight; });
+}
+
+function ssIsGeneralQuery(query, docs) {
+  const q = query.toLowerCase();
+  // Check if any filename is explicitly referenced
+  const mentionsFile = docs.some(d => q.includes(d.filename.toLowerCase().replace(/\.[^.]+$/, '')));
+  if (mentionsFile) return false;
+  // General indicator keywords
+  const generalKws = ['all', 'any', 'every', 'across', 'materials', 'documents', 'files',
+    'uploaded', 'everything', 'overall', 'summary', 'overview', 'important', 'key'];
+  return generalKws.some(kw => q.includes(kw)) || query.split(' ').length < 8;
+}
+
+async function ssSendMessage() {
+  const inp = $('ssQueryInput');
+  const query = inp.value.trim();
+  if (!query || !SS.activeSessionId) return;
+
+  const docsWithChunks = (SS.docs || []).filter(d => d.chunk_count > 0);
+
+  // Show clarification card if: 2+ distinct docs with chunks, general query, no specific filter active
+  const allSelected = SS.activeFilters === null || SS.activeFilters.length === docsWithChunks.length;
+  if (docsWithChunks.length >= 2 && allSelected && ssIsGeneralQuery(query, docsWithChunks)) {
+    inp.value = '';
+    inp.style.height = 'auto';
+    SS.pendingQuery = query;
+    const welcome = document.getElementById('ssChatWelcome');
+    if (welcome) welcome.remove();
+    ssAppendUserBubble(query);
+    ssShowClarificationCard(query, docsWithChunks);
+    return;
+  }
+
+  await ssRunQuery(query, SS.activeFilters && SS.activeFilters.length < docsWithChunks.length ? SS.activeFilters : null);
+}
+
+function ssShowClarificationCard(query, docs) {
+  const card = document.createElement('div');
+  card.className = 'message assistant';
+  card.id = 'ssClarifyCard';
+  const btnAll = `<button class="ss-clarify-btn all-docs" data-filter="__all__">All Documents</button>`;
+  const btnDocs = docs.map(d =>
+    `<button class="ss-clarify-btn" data-filter="${escHtml(d.filename)}" title="${escHtml(d.filename)}">📄 ${escHtml(d.filename)}</button>`
+  ).join('');
+  card.innerHTML = `
+    <div class="avatar">📖</div>
+    <div style="flex:1;min-width:0">
+      <div class="ss-clarify-card">
+        <div class="ss-clarify-title">🤔 Multiple Documents Detected</div>
+        <div class="ss-clarify-desc">
+          Your session has <strong>${docs.length} documents</strong> covering different topics.
+          Which would you like me to focus on for: <em>"${escHtml(query)}"</em>
+        </div>
+        <div class="ss-clarify-options">
+          ${btnAll}
+          ${btnDocs}
+        </div>
+      </div>
+    </div>`;
+  $('ssMessages').appendChild(card);
+  ssScrollBottom();
+}
+
+async function ssRunQuery(query, sourceFilter) {
+  const inp = $('ssQueryInput');
+  inp.value = '';
+  inp.style.height = 'auto';
+  $('ssSendBtn').disabled = true;
+
+  const welcome = document.getElementById('ssChatWelcome');
+  if (welcome) welcome.remove();
+
+  const clarifyCard = $('ssClarifyCard');
+  if (clarifyCard) clarifyCard.remove();
+
+  // Show user bubble on direct send. Clarification path already showed it in ssSendMessage.
+  if (!SS.pendingQuery) ssAppendUserBubble(query);
+
+  const thinking = ssAppendThinking();
+
+  try {
+    const result = await post('/api/self-study/chat', {
+      query,
+      ss_session_id: SS.activeSessionId,
+      model: S.config?.model || 'llama-3.3-70b-versatile',
+      top_k: parseInt($('topK').value),
+      rerank_top_k: parseInt($('rerankK').value),
+      confidence_threshold: parseFloat($('conf').value),
+      enable_verification: $('ssVerifyToggle').checked,
+      chat_history: SS.chatHistory.slice(-10),
+      source_filter: sourceFilter || null,
+    });
+    thinking.remove();
+    ssAppendAssistantBubble(result.final_answer, result);
+    SS.chatHistory.push({ role: 'user', content: query });
+    SS.chatHistory.push({ role: 'assistant', content: result.final_answer });
+  } catch (err) {
+    thinking.remove();
+    ssAppendAssistantBubble(`⚠️ Error: ${escHtml(err.message)}`, null);
+  }
+
+  $('ssSendBtn').disabled = false;
+  inp.focus();
+  SS.pendingQuery = null;
+}
+
+// ── Create session modal ───────────────────────────────
+function ssOpenCreateModal() {
+  $('ssCreateModal').hidden = false;
+  $('ssSessionName').value = '';
+  $('ssSessionDesc').value = '';
+  $('ssModalStatus').textContent = '';
+  setTimeout(() => $('ssSessionName').focus(), 50);
+}
+
+function ssCloseCreateModal() {
+  $('ssCreateModal').hidden = true;
+}
+
+async function ssDoCreateSession() {
+  const name = $('ssSessionName').value.trim();
+  if (!name) {
+    $('ssModalStatus').style.color = 'var(--error)';
+    $('ssModalStatus').textContent = 'Please enter a session name.';
+    return;
+  }
+  const desc = $('ssSessionDesc').value.trim() || null;
+  $('ssModalCreateBtn').disabled = true;
+  $('ssModalStatus').style.color = 'var(--text-muted)';
+  $('ssModalStatus').textContent = 'Creating…';
+
+  try {
+    const res = await post('/api/self-study/sessions', { name, description: desc });
+    ssCloseCreateModal();
+    await ssLoadSessions();
+    await ssSelectSession(res.ss_session_id, res.name);
+  } catch (err) {
+    $('ssModalStatus').style.color = 'var(--error)';
+    $('ssModalStatus').textContent = `Error: ${err.message}`;
+  }
+  $('ssModalCreateBtn').disabled = false;
+}
+
+// ── Delete session ─────────────────────────────────────
+async function ssDeleteActiveSession() {
+  if (!SS.activeSessionId) return;
+  const name = $('ssActiveName').textContent;
+  if (!confirm(`Delete study session "${name}"?\n\nAll documents and chat history will be permanently removed.`)) return;
+
+  try {
+    await fetch(`/api/self-study/sessions/${SS.activeSessionId}`, { method: 'DELETE' });
+    SS.activeSessionId = null;
+    SS.chatHistory = [];
+    $('ssActive').hidden = true;
+    $('ssEmpty').hidden = false;
+    await ssLoadSessions();
+  } catch (err) {
+    alert(`Error deleting session: ${err.message}`);
+  }
+}
+
+// ── Bind Self Study events ─────────────────────────────
+function bindSSEvents() {
+  // New session buttons
+  $('ssNewBtn').addEventListener('click', ssOpenCreateModal);
+  $('ssCreateFirstBtn').addEventListener('click', ssOpenCreateModal);
+
+  // Modal
+  $('ssModalClose').addEventListener('click', ssCloseCreateModal);
+  $('ssModalCancelBtn').addEventListener('click', ssCloseCreateModal);
+  $('ssCreateModal').addEventListener('click', e => { if (e.target === $('ssCreateModal')) ssCloseCreateModal(); });
+  $('ssModalCreateBtn').addEventListener('click', ssDoCreateSession);
+  $('ssSessionName').addEventListener('keydown', e => { if (e.key === 'Enter') ssDoCreateSession(); });
+
+  // Delete session
+  $('ssDeleteSessionBtn').addEventListener('click', ssDeleteActiveSession);
+
+  // Upload zone
+  const dz = $('ssUploadZone');
+  $('ssBrowseLink').addEventListener('click', e => { e.stopPropagation(); $('ssFileInput').click(); });
+  dz.addEventListener('click', () => $('ssFileInput').click());
+  $('ssFileInput').addEventListener('change', e => ssHandleUpload(e.target.files));
+  dz.addEventListener('dragover', e => { e.preventDefault(); dz.classList.add('dragover'); });
+  dz.addEventListener('dragleave', () => dz.classList.remove('dragover'));
+  dz.addEventListener('drop', e => {
+    e.preventDefault(); dz.classList.remove('dragover');
+    ssHandleUpload(e.dataTransfer.files);
+  });
+
+  // Document remove (delegated)
+  $('ssDocsList').addEventListener('click', e => {
+    const btn = e.target.closest('.ss-doc-remove');
+    if (btn) ssRemoveDocument(parseInt(btn.dataset.docId), btn.dataset.filename);
+  });
+
+  // Filter chip toggles
+  $('ssFilterChips').addEventListener('click', e => {
+    const chip = e.target.closest('.ss-filter-chip');
+    if (!chip) return;
+    const fname = chip.dataset.fname;
+    const docsWithChunks = (SS.docs || []).filter(d => d.chunk_count > 0);
+    if (!SS.activeFilters) SS.activeFilters = docsWithChunks.map(d => d.filename);
+
+    if (SS.activeFilters.includes(fname)) {
+      // Deselect — keep at least one selected
+      const next = SS.activeFilters.filter(f => f !== fname);
+      SS.activeFilters = next.length ? next : SS.activeFilters;
+    } else {
+      SS.activeFilters = [...SS.activeFilters, fname];
+    }
+    // Re-render chip states
+    document.querySelectorAll('.ss-filter-chip').forEach(c => {
+      c.classList.toggle('active', SS.activeFilters.includes(c.dataset.fname));
+    });
+  });
+
+  // Clarification card option clicks (delegated on messages container)
+  $('ssMessages').addEventListener('click', e => {
+    const btn = e.target.closest('.ss-clarify-btn');
+    if (!btn || !SS.pendingQuery) return;
+    const filter = btn.dataset.filter;
+    const sourceFilter = filter === '__all__' ? null : [filter];
+    ssRunQuery(SS.pendingQuery, sourceFilter);
+  });
+
+  // Chat
+  $('ssSendBtn').addEventListener('click', ssSendMessage);
+  $('ssQueryInput').addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); ssSendMessage(); }
+  });
+  $('ssQueryInput').addEventListener('input', function () {
+    this.style.height = 'auto';
+    this.style.height = Math.min(this.scrollHeight, 140) + 'px';
+  });
 }
 
 // ── Boot ───────────────────────────────────────────────
