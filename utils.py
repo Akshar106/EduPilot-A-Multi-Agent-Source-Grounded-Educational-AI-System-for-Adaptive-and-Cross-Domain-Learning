@@ -110,36 +110,66 @@ class PipelineResult:
 # LLM caller
 # ---------------------------------------------------------------------------
 
-def call_llm(
+def _is_groq_model(model: str) -> bool:
+    """Return True if the model ID belongs to Groq (not Gemini)."""
+    groq_prefixes = ("llama", "mixtral", "gemma", "qwen", "deepseek", "whisper")
+    return any(model.lower().startswith(p) for p in groq_prefixes)
+
+
+def _call_groq(
     messages: list[dict],
-    system: str | None = None,
-    model: str = DEFAULT_MODEL,
-    max_tokens: int = LLM_MAX_TOKENS_CLASSIFY,
+    system: str | None,
+    model: str,
+    max_tokens: int,
 ) -> str:
-    """
-    Call the Gemini API and return the assistant text.
-    Auto-retries on per-minute limits and falls back to next model on daily exhaustion.
-    Raises on API errors so callers can handle gracefully.
-    """
+    """Call the Groq API (OpenAI-compatible). Raises on failure."""
+    import sys as _sys
+    from groq import Groq
+    from config import GROQ_API_KEY as _GROQ_KEY
+
+    api_key = _GROQ_KEY or os.environ.get("GROQ_API_KEY", "")
+    if not api_key:
+        raise ValueError("GROQ_API_KEY not set in .env file.")
+
+    client = Groq(api_key=api_key)
+    groq_messages = []
+    if system:
+        groq_messages.append({"role": "system", "content": system})
+    groq_messages.extend(messages)
+
+    resp = client.chat.completions.create(
+        model=model,
+        messages=groq_messages,
+        max_tokens=max_tokens,
+        temperature=0.1,
+    )
+    text = resp.choices[0].message.content
+    print(f"[EduPilot] Groq {model} → {len(text)} chars", file=_sys.stderr, flush=True)
+    return text
+
+
+def _call_gemini(
+    messages: list[dict],
+    system: str | None,
+    model: str,
+    max_tokens: int,
+) -> str:
+    """Call the Gemini API. Raises on failure."""
     import re as _re, sys as _sys, time as _time
     from config import AVAILABLE_MODELS
 
     api_key = GEMINI_API_KEY or os.environ.get("GEMINI_API_KEY", "")
     if not api_key:
-        raise ValueError(
-            "GEMINI_API_KEY environment variable not set. "
-            "Get a free key at https://aistudio.google.com and add it to your .env file."
-        )
+        raise ValueError("GEMINI_API_KEY not set in .env file.")
 
     client = genai.Client(api_key=api_key)
 
-    # Build contents from OpenAI-style messages (user/assistant → user/model)
     contents = []
     for msg in messages:
         role = "user" if msg["role"] == "user" else "model"
         contents.append(genai_types.Content(role=role, parts=[genai_types.Part(text=msg["content"])]))
 
-    def _make_config(m: str) -> genai_types.GenerateContentConfig:
+    def _make_cfg(m: str) -> genai_types.GenerateContentConfig:
         kw: dict = dict(
             max_output_tokens=max_tokens,
             temperature=0.1,
@@ -155,37 +185,82 @@ def call_llm(
             kw["thinking_config"] = genai_types.ThinkingConfig(thinking_budget=0)
         return genai_types.GenerateContentConfig(**kw)
 
-    # Build model fallback list: requested model first, then remaining AVAILABLE_MODELS
-    fallback_order = [model] + [m for m in AVAILABLE_MODELS if m != model]
+    # Try requested model first, then fall back through remaining Gemini models
+    gemini_models = [model] + [m for m in AVAILABLE_MODELS if m != model and not _is_groq_model(m)]
 
     last_exc: Exception | None = None
-    for current_model in fallback_order:
-        config = _make_config(current_model)
+    for current_model in gemini_models:
+        cfg = _make_cfg(current_model)
         for attempt in range(3):
             try:
-                response = client.models.generate_content(model=current_model, contents=contents, config=config)
+                response = client.models.generate_content(model=current_model, contents=contents, config=cfg)
                 if current_model != model:
-                    print(f"[EduPilot] Fell back to {current_model} (original: {model})", file=_sys.stderr, flush=True)
+                    print(f"[EduPilot] Gemini fell back to {current_model}", file=_sys.stderr, flush=True)
                 return response.text
             except Exception as exc:
                 err = str(exc)
                 last_exc = exc
                 is_daily = "PerDay" in err or "PerDayPerProject" in err
                 is_quota = "429" in err or "resource_exhausted" in err.lower()
-                if is_daily:
-                    # Daily quota exhausted for this model — try next model
-                    print(f"[EduPilot] Daily quota exhausted for {current_model}, trying next model", file=_sys.stderr, flush=True)
+                is_unavailable = "503" in err or "UNAVAILABLE" in err or "unavailable" in err.lower()
+                if is_daily or is_unavailable:
+                    # Daily quota OR server overload — try next Gemini model
+                    print(f"[EduPilot] Gemini {current_model} unavailable/exhausted → trying next", file=_sys.stderr, flush=True)
                     break
                 if is_quota and attempt < 2:
-                    # Per-minute limit — wait and retry same model
                     delay_match = _re.search(r"retry in (\d+(?:\.\d+)?)s", err, _re.IGNORECASE)
                     wait = float(delay_match.group(1)) + 2 if delay_match else 15
                     print(f"[EduPilot] RPM limit on {current_model} — retrying in {wait:.0f}s", file=_sys.stderr, flush=True)
                     _time.sleep(wait)
                     continue
-                raise  # non-quota error — propagate immediately
+                raise  # non-quota / non-503 error — propagate immediately
 
-    raise last_exc  # all models exhausted
+    raise last_exc  # all Gemini models exhausted
+
+
+def call_llm(
+    messages: list[dict],
+    system: str | None = None,
+    model: str = DEFAULT_MODEL,
+    max_tokens: int = LLM_MAX_TOKENS_CLASSIFY,
+) -> str:
+    """
+    Unified LLM caller supporting both Gemini and Groq.
+
+    Provider is inferred from the model name:
+      • Gemini models (gemini-*)  → Google AI Studio API
+      • Groq models (llama-*, mixtral-*, gemma-*, qwen-*)  → Groq API
+
+    Fallback chain (Gemini requests only):
+      1. Try all Gemini models in AVAILABLE_MODELS order.
+      2. On full Gemini failure (quota, 503) fall through to Groq llama-3.3-70b-versatile.
+    Groq requests are attempted once with no Gemini fallback (Groq is already the fallback).
+    """
+    import sys as _sys
+    from config import GROQ_API_KEY as _GROQ_KEY
+
+    if _is_groq_model(model):
+        # Direct Groq call — no further fallback
+        return _call_groq(messages, system, model, max_tokens)
+
+    # Gemini path — try all Gemini models, then fall back to Groq if everything fails
+    last_exc: Exception | None = None
+    try:
+        return _call_gemini(messages, system, model, max_tokens)
+    except Exception as exc:
+        last_exc = exc
+        print(f"[EduPilot] All Gemini models failed ({exc}), trying Groq fallback…", file=_sys.stderr, flush=True)
+
+    # Groq fallback (only if key is available)
+    groq_key = _GROQ_KEY or os.environ.get("GROQ_API_KEY", "")
+    if groq_key:
+        try:
+            return _call_groq(messages, system, "llama-3.3-70b-versatile", max_tokens)
+        except Exception as groq_exc:
+            print(f"[EduPilot] Groq fallback also failed: {groq_exc}", file=_sys.stderr, flush=True)
+            raise groq_exc
+
+    raise last_exc  # no Groq key — re-raise the Gemini error
 
 
 def parse_json_response(raw: str) -> dict:

@@ -81,11 +81,13 @@ function genUUID() {
 // ── Init ───────────────────────────────────────────────
 async function init() {
   S.config = await apiFetch('/api/config');
+  S.config.model = storageGet('ep_model') || S.config.default_model;
 
   for (const [abbr, d] of Object.entries(S.config.domains)) {
     S.domainColors[abbr] = d.color;
   }
 
+  buildModelSelect();
   buildSamplePrompts();
   buildUploadDomainSelect();
   await loadSessions();
@@ -110,6 +112,34 @@ const SAMPLES = [
   'What is RAG and why does it help?',
   'How does NL2SQL work?',
 ];
+
+function buildModelSelect() {
+  const sel = $('modelSelect');
+  if (!sel) return;
+  const groqSet = new Set(S.config.groq_models || []);
+  const models = S.config.available_models || [];
+
+  // Group: Groq first, then Gemini
+  const groq   = models.filter(m => groqSet.has(m));
+  const gemini = models.filter(m => !groqSet.has(m));
+
+  let html = '';
+  if (groq.length) {
+    html += `<optgroup label="⚡ Groq — Free &amp; Fast">`;
+    groq.forEach(m => { html += `<option value="${m}" ${m === S.config.model ? 'selected' : ''}>${m}</option>`; });
+    html += `</optgroup>`;
+  }
+  if (gemini.length) {
+    html += `<optgroup label="✦ Gemini — Google AI Studio">`;
+    gemini.forEach(m => { html += `<option value="${m}" ${m === S.config.model ? 'selected' : ''}>${m}</option>`; });
+    html += `</optgroup>`;
+  }
+  sel.innerHTML = html;
+  sel.addEventListener('change', () => {
+    S.config.model = sel.value;
+    storageSet('ep_model', sel.value);
+  });
+}
 
 function buildSamplePrompts() {
   $('samplePrompts').innerHTML = SAMPLES.map(s =>
@@ -770,25 +800,43 @@ function renderEvalSummary(stats) {
   const el = $('evalSummary');
   el.hidden = false;
 
-  // Category breakdown rows
   const catRows = Object.entries(stats.by_category || {}).map(([cat, s]) => {
     const catPct = s.total ? Math.round(s.passed / s.total * 100) : 0;
     const color = catPct === 100 ? 'var(--success,#4CAF50)' : catPct >= 50 ? 'var(--iu-crimson)' : 'var(--error,#F44336)';
     return `<span style="background:#F3F4F6;border-radius:4px;padding:2px 8px;font-size:11px;font-weight:600;color:${color}">${cat}: ${s.passed}/${s.total}</span>`;
   }).join('');
 
+  function statColor(v, good=0.80, ok=0.65) {
+    return v >= good ? 'var(--success,#4CAF50)' : v >= ok ? '#FF9800' : 'var(--error,#F44336)';
+  }
+
   const aqScore = stats.avg_answer_quality || stats.avg_quality_score || 0;
-  const aqColor = aqScore >= 0.80 ? 'var(--success,#4CAF50)' : aqScore >= 0.65 ? '#FF9800' : 'var(--iu-crimson)';
   const aqLabel = stats.answer_tests_count != null
-    ? `Answer Quality (${stats.answer_tests_count} graded)`
-    : 'Answer Quality';
+    ? `LLM Quality (${stats.answer_tests_count} graded)` : 'LLM Quality';
+
+  const faithScore = stats.avg_faithfulness || 0;
+  const hitRate    = stats.avg_retrieval_hit_rate || 0;
+  const citAcc     = stats.avg_citation_accuracy || 0;
+  const relevance  = stats.avg_answer_relevance || 0;
+  const latency    = stats.avg_latency_ms || 0;
 
   el.innerHTML = `
+    <div style="grid-column:1/-1;font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.6px;margin-bottom:2px">System Behaviour</div>
     <div class="eval-stat"><div class="eval-stat-val" style="color:${stats.pass_rate>=80?'var(--success,#4CAF50)':'var(--iu-crimson)'}">${stats.pass_rate}%</div><div class="eval-stat-label">Pass Rate (${stats.passed}/${stats.total})</div></div>
     <div class="eval-stat"><div class="eval-stat-val">${stats.intent_accuracy}%</div><div class="eval-stat-label">Intent Accuracy</div></div>
     <div class="eval-stat"><div class="eval-stat-val">${stats.domain_accuracy}%</div><div class="eval-stat-label">Domain Accuracy</div></div>
-    <div class="eval-stat"><div class="eval-stat-val" style="color:${aqColor}">${Math.round(aqScore*100)}%</div><div class="eval-stat-label">${aqLabel}</div></div>
-    ${catRows ? `<div style="grid-column:1/-1;display:flex;flex-wrap:wrap;gap:6px;align-items:center"><span style="font-size:11px;color:var(--text-muted);margin-right:4px">By category:</span>${catRows}</div>` : ''}`;
+
+    <div style="grid-column:1/-1;font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.6px;margin-top:8px;margin-bottom:2px">Answer Quality</div>
+    <div class="eval-stat"><div class="eval-stat-val" style="color:${statColor(aqScore)}">${Math.round(aqScore*100)}%</div><div class="eval-stat-label">${aqLabel}</div></div>
+    <div class="eval-stat" title="Fraction of factual claims in the answer supported by retrieved evidence — catches hallucinations"><div class="eval-stat-val" style="color:${statColor(faithScore)}">${Math.round(faithScore*100)}%</div><div class="eval-stat-label">Faithfulness ⓘ</div></div>
+    <div class="eval-stat" title="Cosine similarity between question and answer embeddings — detects off-topic answers"><div class="eval-stat-val" style="color:${statColor(relevance,0.65,0.45)}">${Math.round(relevance*100)}%</div><div class="eval-stat-label">Answer Relevance ⓘ</div></div>
+
+    <div style="grid-column:1/-1;font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.6px;margin-top:8px;margin-bottom:2px">Retrieval &amp; Citations</div>
+    <div class="eval-stat" title="Fraction of expected domain keywords found in retrieved chunks — diagnoses retriever failures"><div class="eval-stat-val" style="color:${statColor(hitRate)}">${Math.round(hitRate*100)}%</div><div class="eval-stat-label">Retrieval Hit Rate ⓘ</div></div>
+    <div class="eval-stat" title="Fraction of [Source N] citations whose surrounding sentence matches the cited chunk's content"><div class="eval-stat-val" style="color:${statColor(citAcc)}">${Math.round(citAcc*100)}%</div><div class="eval-stat-label">Citation Accuracy ⓘ</div></div>
+    <div class="eval-stat"><div class="eval-stat-val" style="color:var(--text-primary)">${Math.round(latency).toLocaleString()} ms</div><div class="eval-stat-label">Avg Latency</div></div>
+
+    ${catRows ? `<div style="grid-column:1/-1;display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:6px"><span style="font-size:11px;color:var(--text-muted);margin-right:4px">By category:</span>${catRows}</div>` : ''}`;
 }
 
 function renderEvalResults(results) {
@@ -814,20 +862,43 @@ function renderEvalResults(results) {
       ? `<div style="background:#FFF3E0;border:1px solid #FFB74D;border-radius:4px;padding:8px 10px;font-size:12px;color:#E65100">${mismatches.join(' &nbsp;|&nbsp; ')}</div>`
       : '';
 
+    // helper: colour-code a 0-1 score
+    const sc = (v, good=0.80, ok=0.65) =>
+      v == null ? '' : `color:${v>=good?'var(--success,#4CAF50)':v>=ok?'#FF9800':'var(--error,#F44336)'}`;
+
+    const faithScore  = r.faithfulness_score;
+    const hitRate     = r.retrieval_hit_rate;
+    const citAcc      = r.citation_accuracy;
+    const relevance   = r.answer_relevance;
+    const latencyMs   = r.latency_ms;
+
+    // Only show objective metrics when they are meaningful (>0 or not null)
+    const hasMetrics  = faithScore != null || hitRate != null;
+
     card.innerHTML = `
       <div class="eval-card-header" onclick="this.nextElementSibling.classList.toggle('open')">
         <span style="font-size:15px">${r.passed ? '✅' : '❌'}</span>
         <span class="eval-tc-name">${escHtml(r.test_case_id||'')} — ${escHtml(r.name||'')}</span>
         ${catBadge}
         <span style="font-size:13px;font-weight:700;color:${qualColor}">${r.quality_score != null ? pct(r.quality_score) : ''}</span>
+        ${faithScore != null ? `<span style="font-size:11px;${sc(faithScore)}" title="Faithfulness">F:${pct(faithScore)}</span>` : ''}
+        ${latencyMs != null ? `<span style="font-size:11px;color:var(--text-muted)">${Math.round(latencyMs).toLocaleString()}ms</span>` : ''}
         <span style="color:var(--text-muted)">▾</span>
       </div>
       <div class="eval-card-body">
         <div class="eval-meta-row">
           <div class="eval-meta"><div class="eval-meta-key">Intent Check</div><div class="eval-meta-val">${r.intent_match?'✅ Pass':'❌ Fail'} &nbsp;<span style="font-weight:400;font-size:12px;color:var(--text-muted)">${escHtml(r.actual_intent||'—')}</span></div></div>
           <div class="eval-meta"><div class="eval-meta-key">Domain Check</div><div class="eval-meta-val">${r.domain_match?'✅ Pass':'❌ Fail'} &nbsp;<span style="font-weight:400;font-size:12px;color:var(--text-muted)">${escHtml((r.actual_domains||[]).join(', ')||'—')}</span></div></div>
-          <div class="eval-meta"><div class="eval-meta-key">Quality Score</div><div class="eval-meta-val" style="color:${qualColor}">${r.quality_score != null ? pct(r.quality_score) : 'N/A'}</div></div>
+          <div class="eval-meta"><div class="eval-meta-key">LLM Quality</div><div class="eval-meta-val" style="${sc(r.quality_score)}">${r.quality_score != null ? pct(r.quality_score) : 'N/A'}</div></div>
         </div>
+        ${hasMetrics ? `
+        <div class="eval-meta-row" style="margin-top:6px">
+          <div class="eval-meta" title="Fraction of factual claims supported by retrieved evidence"><div class="eval-meta-key">Faithfulness</div><div class="eval-meta-val" style="${sc(faithScore)}">${faithScore != null ? pct(faithScore) : '—'}</div></div>
+          <div class="eval-meta" title="Fraction of expected keywords found in retrieved chunks"><div class="eval-meta-key">Retrieval Hit Rate</div><div class="eval-meta-val" style="${sc(hitRate)}">${hitRate != null ? pct(hitRate) : '—'}</div></div>
+          <div class="eval-meta" title="Fraction of [Source N] citations verified against chunk content"><div class="eval-meta-key">Citation Accuracy</div><div class="eval-meta-val" style="${sc(citAcc)}">${citAcc != null ? pct(citAcc) : '—'}</div></div>
+          <div class="eval-meta" title="Cosine similarity between question and answer embeddings"><div class="eval-meta-key">Answer Relevance</div><div class="eval-meta-val" style="${sc(relevance,0.65,0.45)}">${relevance != null ? pct(relevance) : '—'}</div></div>
+          <div class="eval-meta"><div class="eval-meta-key">Latency</div><div class="eval-meta-val">${latencyMs != null ? Math.round(latencyMs).toLocaleString()+'ms' : '—'}</div></div>
+        </div>` : ''}
         ${mismatchHtml}
         ${r.expected_behavior ? `<div class="eval-answer"><b style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px">Expected Behavior</b><br>${escHtml(r.expected_behavior)}</div>` : ''}
         ${r.answer_preview ? `<div class="eval-answer"><b style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px">Answer Preview</b><br>${escHtml(r.answer_preview)}${r.answer_preview.length >= 500 ? '…' : ''}</div>` : ''}

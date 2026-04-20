@@ -500,7 +500,7 @@ textarea#queryInput::placeholder { color: var(--text-light); }
 .progress-bar { height: 6px; background: #E0E0E0; border-radius: 3px; overflow: hidden; }
 .progress-fill { height: 100%; background: var(--iu-crimson); border-radius: 3px; transition: width .3s ease; }
 .progress-label { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
-.eval-summary { display: grid; grid-template-columns: repeat(4,1fr); gap: 12px; align-items: start; }
+.eval-summary { display: grid; grid-template-columns: repeat(3,1fr); gap: 10px; align-items: start; }
 .eval-stat {
   background: #fff; border: 1px solid var(--border);
   border-radius: var(--radius); padding: 14px 16px; box-shadow: var(--shadow);
@@ -523,7 +523,7 @@ textarea#queryInput::placeholder { color: var(--text-light); }
   display: none; flex-direction: column; gap: 10px; font-size: 13px;
 }
 .eval-card-body.open { display: flex; }
-.eval-meta-row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
+.eval-meta-row { display: grid; grid-template-columns: repeat(auto-fill,minmax(130px,1fr)); gap: 8px; }
 .eval-meta { background: #F9F9F9; border: 1px solid var(--border); padding: 8px 10px; border-radius: var(--radius-sm); }
 .eval-meta-key { font-size: 11px; color: var(--text-muted); }
 .eval-meta-val { font-size: 14px; font-weight: 600; margin-top: 2px; }
