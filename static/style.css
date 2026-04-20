@@ -50,12 +50,10 @@ body {
 .topnav-logo  { font-size: 22px; }
 .topnav-brand { font-size: 17px; font-weight: 700; }
 .topnav-sub   { font-size: 12px; opacity: .75; }
-.topnav-model {
-  margin-left: auto; font-size: 12px;
-  background: rgba(255,255,255,.18); border-radius: 20px;
-  padding: 3px 12px; display: flex; align-items: center; gap: 6px;
+.topnav-tagline {
+  margin-left: auto; font-size: 12px; font-style: italic;
+  opacity: .85; letter-spacing: 0.02em;
 }
-.topnav-model-dot { width: 7px; height: 7px; border-radius: 50%; background: #4ade80; }
 
 /* ── App body ────────────────────────────────────────── */
 .app-body { display: flex; flex: 1; overflow: hidden; min-height: 0; }
