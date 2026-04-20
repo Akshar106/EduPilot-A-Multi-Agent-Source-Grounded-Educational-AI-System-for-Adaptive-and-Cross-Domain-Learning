@@ -346,10 +346,18 @@ RULES — no exceptions:
    point to one, do not write that sentence.
 2. Do NOT use your training knowledge — even if you are certain it is correct.
 3. Format well-supported answers with ## headers, bullet points, **bold** key terms, and [Source N]
-   citations. Include formulas and numbers verbatim from the excerpts.
+   citations.
 4. When the excerpts contain the answer: be thorough and detailed — include every relevant formula,
    definition, and technical detail that the excerpts explicitly state.
-5. When the excerpts do NOT contain the answer: respond with exactly —
+   Math formatting: PDFs often extract formulas with garbled spacing/subscripts. When you see
+   garbled math (e.g. "W Q i ∈Rdmodel×dk", "headi", "dmodel"), clean it into readable notation:
+   use underscores for subscripts (W_Q^i), write ∈ ℝ^(d_model × d_k), use proper × symbol.
+   Wrap all formulas in backticks for monospace: `MultiHead(Q,K,V) = Concat(head_1,...,head_h)·W^O`.
+5. When matching concepts: the user may use informal or alternative terminology (e.g. "self attention
+   block" vs "self-attention mechanism", "neural net" vs "neural network"). If the excerpts clearly
+   cover the same concept under a different name, answer using that content and note what the document
+   calls it. Only say "cannot find" if the concept is truly absent from the excerpts.
+6. When the excerpts do NOT contain the answer: respond with exactly —
    "I cannot find information about [topic] in the selected document(s). Please select a different
    document or rephrase your question."
    Do NOT attempt to answer from memory.\
@@ -390,6 +398,41 @@ CRITICAL RULES for Self Study verification:
 5. Never hallucinate. A short, honest "cannot find" answer is always better than a long, fabricated one.
 
 Respond ONLY with valid JSON. No markdown fences, no extra text.\
+"""
+
+SS_VERIFIER_USER = """\
+Evaluate this Self Study answer. The answer must be grounded in the provided evidence excerpts.
+
+Original question: {original_query}
+
+--- RETRIEVED EVIDENCE ---
+{evidence_summary}
+--- END EVIDENCE ---
+
+--- ANSWER TO EVALUATE ---
+{answer}
+--- END ANSWER ---
+
+Score the answer on these criteria (all scores 0.0 to 1.0):
+- quality_score: How well does the answer address the question using the evidence?
+  Give 0.85+ if the answer is accurate, well-structured, and grounded in the excerpts.
+  Give 0.65-0.84 if mostly correct but missing some points.
+  Give below 0.65 only if the answer is wrong, vague, or contradicts the evidence.
+  NOTE: Do NOT penalize for length — a concise accurate answer scores just as high as a long one.
+- coverage_score: Fraction of the question's aspects that are answered (0.0 to 1.0).
+- grounding_score: Fraction of claims traceable to the evidence excerpts (0.0 to 1.0).
+
+Respond with this exact JSON structure (fill in your scores, no markdown, no extra text):
+{{
+  "is_satisfactory": <true or false>,
+  "quality_score": <your score between 0.0 and 1.0>,
+  "coverage_score": <your score between 0.0 and 1.0>,
+  "grounding_score": <your score between 0.0 and 1.0>,
+  "issues": <list of strings, empty if none>,
+  "missing_topics": <list of strings, empty if none>,
+  "has_unsupported_claims": <true or false>,
+  "revised_answer": null
+}}\
 """
 
 # ---------------------------------------------------------------------------

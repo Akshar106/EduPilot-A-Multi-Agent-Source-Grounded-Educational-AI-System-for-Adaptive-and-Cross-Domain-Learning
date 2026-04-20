@@ -277,7 +277,7 @@ def generate_ss_answer(
         answer_text = f"Error generating answer: {exc}"
 
     citations = [c.citation_label() for c in retrieved_chunks]
-    return DomainAnswer(
+    da = DomainAnswer(
         domain="Self Study",
         sub_question=question,
         answer=answer_text,
@@ -286,6 +286,8 @@ def generate_ss_answer(
         num_chunks_used=len(retrieved_chunks),
         no_evidence=False,
     )
+    da.answer = _add_reference_list(da.answer, da)
+    return da
 
 
 def _add_reference_list(answer_text: str, da: DomainAnswer) -> str:

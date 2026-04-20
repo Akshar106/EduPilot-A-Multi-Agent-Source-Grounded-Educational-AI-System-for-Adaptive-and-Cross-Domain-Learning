@@ -408,13 +408,15 @@ def format_chunks_for_prompt(chunks: list[RetrievedChunk]) -> str:
     return "\n---\n".join(parts)
 
 
-def format_evidence_summary(domain_answers: list[DomainAnswer]) -> str:
+def format_evidence_summary(domain_answers: list[DomainAnswer], max_chars_per_chunk: int = 500) -> str:
     """Compact evidence listing for the verifier prompt."""
     lines = []
     for da in domain_answers:
         lines.append(f"Domain {da.domain} — sub-question: '{da.sub_question}'")
         for i, chunk in enumerate(da.retrieved_chunks, 1):
-            lines.append(f"  [Src {i}] {chunk.citation_label()}: {chunk.text[:200]}…")
+            text = chunk.text
+            truncated = text[:max_chars_per_chunk] + "…" if len(text) > max_chars_per_chunk else text
+            lines.append(f"  [Src {i}] {chunk.citation_label()}: {truncated}")
     return "\n".join(lines) if lines else "(No evidence retrieved.)"
 
 

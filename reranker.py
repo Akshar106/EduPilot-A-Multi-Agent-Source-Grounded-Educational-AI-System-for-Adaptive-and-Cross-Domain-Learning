@@ -131,7 +131,8 @@ def rerank_cross_encoder(
     chunks.sort(key=lambda c: c.rerank_score, reverse=True)
     filtered = [c for c in chunks if c.rerank_score >= confidence_threshold]
     if not filtered and chunks:
-        filtered = [chunks[0]]
+        # Keep top_k best chunks rather than just 1 — single chunk is insufficient context
+        filtered = chunks[:top_k]
     return filtered[:top_k]
 
 

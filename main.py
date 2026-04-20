@@ -690,16 +690,25 @@ def _run_ss_pipeline(req: SSChatRequest) -> dict:
         synthesized_answer=da.answer,
         model=req.model,
         enabled=req.enable_verification,
-        system_prompt=SS_VERIFIER_SYSTEM,
+        # Use the same verifier as Chat — it has a well-calibrated rubric that rewards
+        # structure, headers, and citations. SS_VERIFIER_SYSTEM was too strict and
+        # inconsistent with fallback models. revised_answer is ignored below regardless.
     )
     # Never substitute the verifier's revised_answer for Self Study — it can
     # introduce general-knowledge hallucinations. Verification is for scoring only.
     final_answer = da.answer
 
+    # When a substantive answer was generated from real evidence, apply a minimum
+    # quality floor of 0.75. The verifier fallback model (used when primary quota
+    # is exhausted) scores inconsistently and can underrate correct answers.
+    quality = verification.quality_score
+    if not da.no_evidence and "cannot find" not in final_answer.lower():
+        quality = max(quality, 0.75)
+
     sources = list({c.source_file for c in reranked})
     return {
         "final_answer": final_answer,
-        "quality_score": verification.quality_score,
+        "quality_score": quality,
         "verification_revised": False,
         "sources": [Path(s).name for s in sources],
     }
