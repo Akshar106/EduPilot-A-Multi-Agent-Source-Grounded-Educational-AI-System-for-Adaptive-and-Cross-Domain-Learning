@@ -46,6 +46,20 @@ function renderMd(text) {
   return marked.parse(text || '');
 }
 
+function applyKatex(el) {
+  if (!el || !window.renderMathInElement) return;
+  renderMathInElement(el, {
+    delimiters: [
+      { left: '$$', right: '$$', display: true  },
+      { left: '$',  right: '$',  display: false },
+      { left: '\\[', right: '\\]', display: true  },
+      { left: '\\(', right: '\\)', display: false },
+    ],
+    throwOnError: false,
+    errorColor: '#c00',
+  });
+}
+
 function pct(v) { return `${Math.round((v || 0) * 100)}%`; }
 
 function fmtSize(bytes) {
@@ -239,17 +253,61 @@ function appendAssistantBubble(text, result, showDebug) {
   }
 
   const debugHtml = showDebug && result?.debug ? buildDebugHtml(result.debug) : '';
+  const sourcesHtml = result?.sources?.length ? buildSourcesHtml(result.sources) : '';
 
   d.innerHTML = `
     <div class="avatar">🎓</div>
     <div style="flex:1;min-width:0">
       ${meta ? `<div class="msg-meta">${meta}</div>` : ''}
       <div class="bubble">${renderMd(text)}</div>
+      ${sourcesHtml}
       ${debugHtml}
     </div>`;
   $('messages').appendChild(d);
   hljs.highlightAll();
+  applyKatex(d);
   scrollBottom();
+}
+
+function buildSourcesHtml(sources) {
+  if (!sources || !sources.length) return '';
+
+  // Group by domain so multi-domain responses are clear
+  const byDomain = {};
+  for (const s of sources) {
+    if (!byDomain[s.domain]) byDomain[s.domain] = [];
+    byDomain[s.domain].push(s);
+  }
+
+  const domainColors = S.domainColors || {};
+  const items = sources.map(s => {
+    const color = domainColors[s.domain] || '#888';
+    const downloadUrl = `/api/documents/${encodeURIComponent(s.domain)}/${encodeURIComponent(s.filename)}`;
+    // citation_label already includes page number — don't add it again
+    const label = s.citation_label;
+    return `
+      <div class="source-item">
+        <div class="source-item-header" onclick="this.classList.toggle('open');this.nextElementSibling.classList.toggle('open')">
+          <span class="source-num">Source ${s.source_num}</span>
+          <span class="source-domain-tag" style="background:${color}20;color:${color};border:1px solid ${color}40">${escHtml(s.domain)}</span>
+          <span class="source-label" title="${escHtml(label)}">${escHtml(label)}</span>
+          <a class="source-download" href="${downloadUrl}" download title="Download ${escHtml(s.filename)}" onclick="event.stopPropagation()">⬇ PDF</a>
+          <span class="source-expand-arrow">▾</span>
+        </div>
+        <div class="source-item-text">${escHtml(s.text)}</div>
+      </div>`;
+  }).join('');
+
+  const total = sources.length;
+  return `
+    <div class="sources-panel">
+      <div class="sources-toggle" onclick="this.classList.toggle('open');this.nextElementSibling.classList.toggle('open')">
+        📎 <span>${total} source${total !== 1 ? 's' : ''} retrieved</span>
+        <span style="font-size:10px;color:var(--text-muted);margin-left:4px">— click to expand and verify grounding</span>
+        <span class="sources-toggle-arrow">▾</span>
+      </div>
+      <div class="sources-body">${items}</div>
+    </div>`;
 }
 
 function appendThinking() {
@@ -579,14 +637,27 @@ const KB_INFO = {
   },
 };
 
+const FILE_ICONS = { '.pdf': '📄', '.md': '📝', '.txt': '📃', '.docx': '📋' };
+
+function fmtBytes(b) {
+  if (b >= 1048576) return (b / 1048576).toFixed(1) + ' MB';
+  if (b >= 1024) return (b / 1024).toFixed(0) + ' KB';
+  return b + ' B';
+}
+
 async function renderKBTab() {
   const container = $('kbContent');
   container.innerHTML = '<div style="color:var(--text-muted);padding:20px">Loading…</div>';
 
   let chunkCounts = {};
+  let kbDocs = {};
   try {
-    const data = await apiFetch('/api/kb/status');
-    for (const [d, info] of Object.entries(data)) chunkCounts[d] = info.chunk_count;
+    const [statusData, docsData] = await Promise.all([
+      apiFetch('/api/kb/status'),
+      apiFetch('/api/kb/documents'),
+    ]);
+    for (const [d, info] of Object.entries(statusData)) chunkCounts[d] = info.chunk_count;
+    kbDocs = docsData;
   } catch {}
 
   const domains = S.config?.domains || {};
@@ -594,6 +665,22 @@ async function renderKBTab() {
     const d = domains[abbr] || {};
     const color = d.color || '#999';
     const count = chunkCounts[abbr] || 0;
+    const docs = (kbDocs[abbr] || {}).documents || [];
+
+    const docsHtml = docs.length
+      ? docs.map(doc => {
+          const icon = FILE_ICONS[doc.extension] || '📄';
+          const url = `/api/documents/${encodeURIComponent(abbr)}/${encodeURIComponent(doc.filename)}`;
+          return `
+            <div class="kb-doc-item">
+              <span class="kb-doc-icon">${icon}</span>
+              <span class="kb-doc-name" title="${escHtml(doc.filename)}">${escHtml(doc.filename)}</span>
+              <span class="kb-doc-meta">${fmtBytes(doc.size_bytes)}</span>
+              <a class="kb-doc-download" href="${url}" download title="Download ${escHtml(doc.filename)}">⬇ Download</a>
+            </div>`;
+        }).join('')
+      : '<div style="color:var(--text-muted);font-size:13px;padding:6px 0">No documents found in this knowledge base folder.</div>';
+
     return `
     <div class="kb-subject-card">
       <div class="kb-card-header">
@@ -613,6 +700,10 @@ async function renderKBTab() {
           </ul>
         </div>
       </div>
+      <div class="kb-docs-section">
+        <div class="kb-section-label">Source Documents (${docs.length} file${docs.length !== 1 ? 's' : ''})</div>
+        <div class="kb-docs-list">${docsHtml}</div>
+      </div>
     </div>`;
   }).join('');
 }
@@ -630,20 +721,28 @@ async function runAllEvals() {
   const prog = $('evalProgress');
   prog.hidden = false;
   $('progressFill').style.width = '5%';
-  $('progressLabel').textContent = 'Running all test cases…';
+  $('progressLabel').textContent = 'Running all 10 test cases… (this may take 1–2 min)';
   $('runAllBtn').disabled = true;
   $('evalResults').innerHTML = '';
   $('evalSummary').hidden = true;
 
   try {
-    const data = await fetch('/api/evaluate', { method: 'POST' }).then(r => r.json());
+    const res = await fetch('/api/evaluate', { method: 'POST' });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`Server error ${res.status}: ${text.slice(0, 200)}`);
+    }
+    const data = await res.json();
     $('progressFill').style.width = '100%';
-    $('progressLabel').textContent = '✅ Complete';
-    setTimeout(() => { prog.hidden = true; }, 2000);
+    $('progressLabel').textContent = `✅ Complete — ${data.stats.passed}/${data.stats.total} passed`;
+    setTimeout(() => { prog.hidden = true; }, 3000);
     renderEvalSummary(data.stats);
     renderEvalResults(data.results);
   } catch (err) {
+    $('progressFill').style.width = '100%';
+    $('progressFill').style.background = 'var(--error)';
     $('progressLabel').textContent = `❌ ${err.message}`;
+    setTimeout(() => { $('progressFill').style.background = ''; prog.hidden = true; }, 5000);
   }
   $('runAllBtn').disabled = false;
 }
@@ -654,10 +753,15 @@ async function runSingleEval() {
   $('runSingleBtn').disabled = true;
   $('evalResults').innerHTML = `<div class="thinking"><div class="dot-bounce"><span></span><span></span><span></span></div> Running ${escHtml(tcId)}…</div>`;
   try {
-    const data = await fetch(`/api/evaluate/${tcId}`, { method: 'POST' }).then(r => r.json());
+    const res = await fetch(`/api/evaluate/${tcId}`, { method: 'POST' });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`Server error ${res.status}: ${text.slice(0, 200)}`);
+    }
+    const data = await res.json();
     renderEvalResults([data]);
   } catch (err) {
-    $('evalResults').innerHTML = `<div style="color:var(--error)">Error: ${escHtml(err.message)}</div>`;
+    $('evalResults').innerHTML = `<div style="color:var(--error);padding:12px">Error: ${escHtml(err.message)}</div>`;
   }
   $('runSingleBtn').disabled = false;
 }
@@ -665,35 +769,69 @@ async function runSingleEval() {
 function renderEvalSummary(stats) {
   const el = $('evalSummary');
   el.hidden = false;
+
+  // Category breakdown rows
+  const catRows = Object.entries(stats.by_category || {}).map(([cat, s]) => {
+    const catPct = s.total ? Math.round(s.passed / s.total * 100) : 0;
+    const color = catPct === 100 ? 'var(--success,#4CAF50)' : catPct >= 50 ? 'var(--iu-crimson)' : 'var(--error,#F44336)';
+    return `<span style="background:#F3F4F6;border-radius:4px;padding:2px 8px;font-size:11px;font-weight:600;color:${color}">${cat}: ${s.passed}/${s.total}</span>`;
+  }).join('');
+
+  const aqScore = stats.avg_answer_quality || stats.avg_quality_score || 0;
+  const aqColor = aqScore >= 0.80 ? 'var(--success,#4CAF50)' : aqScore >= 0.65 ? '#FF9800' : 'var(--iu-crimson)';
+  const aqLabel = stats.answer_tests_count != null
+    ? `Answer Quality (${stats.answer_tests_count} graded)`
+    : 'Answer Quality';
+
   el.innerHTML = `
-    <div class="eval-stat"><div class="eval-stat-val">${stats.pass_rate}%</div><div class="eval-stat-label">Pass Rate (${stats.passed}/${stats.total})</div></div>
+    <div class="eval-stat"><div class="eval-stat-val" style="color:${stats.pass_rate>=80?'var(--success,#4CAF50)':'var(--iu-crimson)'}">${stats.pass_rate}%</div><div class="eval-stat-label">Pass Rate (${stats.passed}/${stats.total})</div></div>
     <div class="eval-stat"><div class="eval-stat-val">${stats.intent_accuracy}%</div><div class="eval-stat-label">Intent Accuracy</div></div>
     <div class="eval-stat"><div class="eval-stat-val">${stats.domain_accuracy}%</div><div class="eval-stat-label">Domain Accuracy</div></div>
-    <div class="eval-stat"><div class="eval-stat-val">${(stats.avg_quality_score||0).toFixed(2)}</div><div class="eval-stat-label">Avg Quality</div></div>`;
+    <div class="eval-stat"><div class="eval-stat-val" style="color:${aqColor}">${Math.round(aqScore*100)}%</div><div class="eval-stat-label">${aqLabel}</div></div>
+    ${catRows ? `<div style="grid-column:1/-1;display:flex;flex-wrap:wrap;gap:6px;align-items:center"><span style="font-size:11px;color:var(--text-muted);margin-right:4px">By category:</span>${catRows}</div>` : ''}`;
 }
 
 function renderEvalResults(results) {
   const el = $('evalResults');
   el.innerHTML = '';
+  const catColors = {
+    'single-domain': '#4CAF50', 'multi-domain': '#2196F3', 'edge-case': '#FF9800',
+    'verification': '#9C27B0', 'citation': '#00BCD4', 'multi-turn': '#F44336',
+  };
   for (const r of results) {
     const card = document.createElement('div');
     card.className = 'eval-card';
+    const catColor = catColors[r.category] || '#888';
+    const catBadge = r.category
+      ? `<span style="font-size:10px;font-weight:600;background:${catColor}18;color:${catColor};border:1px solid ${catColor}40;border-radius:3px;padding:1px 6px">${escHtml(r.category)}</span>`
+      : '';
+    const qualColor = r.quality_score >= 0.75 ? 'var(--success,#4CAF50)' : r.quality_score >= 0.5 ? '#FF9800' : 'var(--error,#F44336)';
+    // Mismatch highlights
+    const mismatches = [];
+    if (r.intent_match === false) mismatches.push(`Intent mismatch: got <b>${escHtml(r.actual_intent||'?')}</b>`);
+    if (r.domain_match === false) mismatches.push(`Domain mismatch: got <b>[${escHtml((r.actual_domains||[]).join(', '))}]</b>`);
+    const mismatchHtml = mismatches.length
+      ? `<div style="background:#FFF3E0;border:1px solid #FFB74D;border-radius:4px;padding:8px 10px;font-size:12px;color:#E65100">${mismatches.join(' &nbsp;|&nbsp; ')}</div>`
+      : '';
+
     card.innerHTML = `
       <div class="eval-card-header" onclick="this.nextElementSibling.classList.toggle('open')">
-        <span>${r.passed ? '✅' : '❌'}</span>
+        <span style="font-size:15px">${r.passed ? '✅' : '❌'}</span>
         <span class="eval-tc-name">${escHtml(r.test_case_id||'')} — ${escHtml(r.name||'')}</span>
-        <span class="quality-chip">${r.quality_score ? pct(r.quality_score) : ''}</span>
+        ${catBadge}
+        <span style="font-size:13px;font-weight:700;color:${qualColor}">${r.quality_score != null ? pct(r.quality_score) : ''}</span>
         <span style="color:var(--text-muted)">▾</span>
       </div>
       <div class="eval-card-body">
         <div class="eval-meta-row">
-          <div class="eval-meta"><div class="eval-meta-key">Intent</div><div class="eval-meta-val">${r.intent_match?'✅':'❌'} ${escHtml(r.actual_intent||'')}</div></div>
-          <div class="eval-meta"><div class="eval-meta-key">Domain</div><div class="eval-meta-val">${r.domain_match?'✅':'❌'} ${escHtml((r.actual_domains||[]).join(', '))}</div></div>
-          <div class="eval-meta"><div class="eval-meta-key">Quality</div><div class="eval-meta-val">${r.quality_score ? pct(r.quality_score) : 'N/A'}</div></div>
+          <div class="eval-meta"><div class="eval-meta-key">Intent Check</div><div class="eval-meta-val">${r.intent_match?'✅ Pass':'❌ Fail'} &nbsp;<span style="font-weight:400;font-size:12px;color:var(--text-muted)">${escHtml(r.actual_intent||'—')}</span></div></div>
+          <div class="eval-meta"><div class="eval-meta-key">Domain Check</div><div class="eval-meta-val">${r.domain_match?'✅ Pass':'❌ Fail'} &nbsp;<span style="font-weight:400;font-size:12px;color:var(--text-muted)">${escHtml((r.actual_domains||[]).join(', ')||'—')}</span></div></div>
+          <div class="eval-meta"><div class="eval-meta-key">Quality Score</div><div class="eval-meta-val" style="color:${qualColor}">${r.quality_score != null ? pct(r.quality_score) : 'N/A'}</div></div>
         </div>
-        ${r.expected_behavior ? `<div class="eval-answer"><b>Expected:</b> ${escHtml(r.expected_behavior)}</div>` : ''}
-        ${r.answer_preview ? `<div class="eval-answer"><b>Answer:</b> ${escHtml(r.answer_preview)}…</div>` : ''}
-        ${r.error ? `<div style="color:var(--error);font-size:12px">${escHtml(r.error)}</div>` : ''}
+        ${mismatchHtml}
+        ${r.expected_behavior ? `<div class="eval-answer"><b style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px">Expected Behavior</b><br>${escHtml(r.expected_behavior)}</div>` : ''}
+        ${r.answer_preview ? `<div class="eval-answer"><b style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px">Answer Preview</b><br>${escHtml(r.answer_preview)}${r.answer_preview.length >= 500 ? '…' : ''}</div>` : ''}
+        ${r.error ? `<div style="background:#FFEBEE;border:1px solid #EF9A9A;border-radius:4px;padding:8px 10px;color:#C62828;font-size:12px"><b>Error:</b> ${escHtml(r.error)}</div>` : ''}
       </div>`;
     el.appendChild(card);
   }
@@ -1131,6 +1269,7 @@ function ssAppendAssistantBubble(text, result) {
     </div>`;
   $('ssMessages').appendChild(d);
   hljs.highlightAll();
+  applyKatex(d);
   ssScrollBottom();
 }
 
@@ -1234,7 +1373,7 @@ async function ssRunQuery(query, sourceFilter) {
     const result = await post('/api/self-study/chat', {
       query,
       ss_session_id: SS.activeSessionId,
-      model: S.config?.model || 'llama-3.3-70b-versatile',
+      model: S.config?.model || S.config?.default_model || 'gemini-2.5-flash',
       top_k: parseInt($('topK').value),
       rerank_top_k: parseInt($('rerankK').value),
       confidence_threshold: parseFloat($('conf').value),

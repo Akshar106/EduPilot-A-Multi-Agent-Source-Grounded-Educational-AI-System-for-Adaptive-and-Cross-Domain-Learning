@@ -14,13 +14,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
-from groq import Groq
+from google import genai
+from google.genai import types as genai_types
 
 from config import (
     CHUNK_OVERLAP,
     CHUNK_SIZE,
     DEFAULT_MODEL,
-    GROQ_API_KEY,
+    GEMINI_API_KEY,
     LLM_MAX_TOKENS_CLASSIFY,
     SUPPORTED_EXTENSIONS,
 )
@@ -55,8 +56,20 @@ class RetrievedChunk:
     metadata: dict = field(default_factory=dict)
 
     def citation_label(self) -> str:
-        """Human-readable citation string."""
-        base = Path(self.source_file).stem.replace("_", " ").title()
+        """Human-readable citation string, preserving acronyms like ML, LLMs, AML."""
+        import re
+        stem = Path(self.source_file).stem
+        # Replace separators with spaces
+        stem = re.sub(r"[-_]+", " ", stem)
+        words = stem.split()
+        formatted = []
+        for w in words:
+            # Preserve all-uppercase tokens (ML, AML, LLMs, SP26, BCNF…)
+            if re.match(r'^[A-Z][A-Z0-9s]*$', w):
+                formatted.append(w)
+            else:
+                formatted.append(w.capitalize())
+        base = " ".join(formatted)
         if self.page_number:
             return f"{base}, p.{self.page_number}"
         return base
@@ -104,31 +117,75 @@ def call_llm(
     max_tokens: int = LLM_MAX_TOKENS_CLASSIFY,
 ) -> str:
     """
-    Call the Groq API and return the assistant text.
+    Call the Gemini API and return the assistant text.
+    Auto-retries on per-minute limits and falls back to next model on daily exhaustion.
     Raises on API errors so callers can handle gracefully.
     """
-    api_key = GROQ_API_KEY or os.environ.get("GROQ_API_KEY", "")
+    import re as _re, sys as _sys, time as _time
+    from config import AVAILABLE_MODELS
+
+    api_key = GEMINI_API_KEY or os.environ.get("GEMINI_API_KEY", "")
     if not api_key:
         raise ValueError(
-            "GROQ_API_KEY environment variable not set. "
-            "Add it to your .env file or export it before running EduPilot."
+            "GEMINI_API_KEY environment variable not set. "
+            "Get a free key at https://aistudio.google.com and add it to your .env file."
         )
 
-    client = Groq(api_key=api_key)
+    client = genai.Client(api_key=api_key)
 
-    # Groq uses the OpenAI messages format; prepend system as a system message
-    full_messages: list[dict] = []
-    if system:
-        full_messages.append({"role": "system", "content": system})
-    full_messages.extend(messages)
+    # Build contents from OpenAI-style messages (user/assistant → user/model)
+    contents = []
+    for msg in messages:
+        role = "user" if msg["role"] == "user" else "model"
+        contents.append(genai_types.Content(role=role, parts=[genai_types.Part(text=msg["content"])]))
 
-    response = client.chat.completions.create(
-        model=model,
-        messages=full_messages,
-        max_tokens=max_tokens,
-    )
+    def _make_config(m: str) -> genai_types.GenerateContentConfig:
+        kw: dict = dict(
+            max_output_tokens=max_tokens,
+            temperature=0.1,
+            system_instruction=system,
+            safety_settings=[
+                genai_types.SafetySetting(category="HARM_CATEGORY_HARASSMENT",        threshold="BLOCK_NONE"),
+                genai_types.SafetySetting(category="HARM_CATEGORY_HATE_SPEECH",       threshold="BLOCK_NONE"),
+                genai_types.SafetySetting(category="HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold="BLOCK_NONE"),
+                genai_types.SafetySetting(category="HARM_CATEGORY_DANGEROUS_CONTENT", threshold="BLOCK_NONE"),
+            ],
+        )
+        if "2.5" in m:
+            kw["thinking_config"] = genai_types.ThinkingConfig(thinking_budget=0)
+        return genai_types.GenerateContentConfig(**kw)
 
-    return response.choices[0].message.content or ""
+    # Build model fallback list: requested model first, then remaining AVAILABLE_MODELS
+    fallback_order = [model] + [m for m in AVAILABLE_MODELS if m != model]
+
+    last_exc: Exception | None = None
+    for current_model in fallback_order:
+        config = _make_config(current_model)
+        for attempt in range(3):
+            try:
+                response = client.models.generate_content(model=current_model, contents=contents, config=config)
+                if current_model != model:
+                    print(f"[EduPilot] Fell back to {current_model} (original: {model})", file=_sys.stderr, flush=True)
+                return response.text
+            except Exception as exc:
+                err = str(exc)
+                last_exc = exc
+                is_daily = "PerDay" in err or "PerDayPerProject" in err
+                is_quota = "429" in err or "resource_exhausted" in err.lower()
+                if is_daily:
+                    # Daily quota exhausted for this model — try next model
+                    print(f"[EduPilot] Daily quota exhausted for {current_model}, trying next model", file=_sys.stderr, flush=True)
+                    break
+                if is_quota and attempt < 2:
+                    # Per-minute limit — wait and retry same model
+                    delay_match = _re.search(r"retry in (\d+(?:\.\d+)?)s", err, _re.IGNORECASE)
+                    wait = float(delay_match.group(1)) + 2 if delay_match else 15
+                    print(f"[EduPilot] RPM limit on {current_model} — retrying in {wait:.0f}s", file=_sys.stderr, flush=True)
+                    _time.sleep(wait)
+                    continue
+                raise  # non-quota error — propagate immediately
+
+    raise last_exc  # all models exhausted
 
 
 def parse_json_response(raw: str) -> dict:
@@ -351,13 +408,15 @@ def format_chunks_for_prompt(chunks: list[RetrievedChunk]) -> str:
     return "\n---\n".join(parts)
 
 
-def format_evidence_summary(domain_answers: list[DomainAnswer]) -> str:
+def format_evidence_summary(domain_answers: list[DomainAnswer], max_chars_per_chunk: int = 500) -> str:
     """Compact evidence listing for the verifier prompt."""
     lines = []
     for da in domain_answers:
         lines.append(f"Domain {da.domain} — sub-question: '{da.sub_question}'")
         for i, chunk in enumerate(da.retrieved_chunks, 1):
-            lines.append(f"  [Src {i}] {chunk.citation_label()}: {chunk.text[:200]}…")
+            text = chunk.text
+            truncated = text[:max_chars_per_chunk] + "…" if len(text) > max_chars_per_chunk else text
+            lines.append(f"  [Src {i}] {chunk.citation_label()}: {truncated}")
     return "\n".join(lines) if lines else "(No evidence retrieved.)"
 
 

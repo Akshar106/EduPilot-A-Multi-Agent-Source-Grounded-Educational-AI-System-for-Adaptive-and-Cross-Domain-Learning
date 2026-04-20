@@ -50,12 +50,10 @@ body {
 .topnav-logo  { font-size: 22px; }
 .topnav-brand { font-size: 17px; font-weight: 700; }
 .topnav-sub   { font-size: 12px; opacity: .75; }
-.topnav-model {
-  margin-left: auto; font-size: 12px;
-  background: rgba(255,255,255,.18); border-radius: 20px;
-  padding: 3px 12px; display: flex; align-items: center; gap: 6px;
+.topnav-tagline {
+  margin-left: auto; font-size: 12px; font-style: italic;
+  opacity: .85; letter-spacing: 0.02em;
 }
-.topnav-model-dot { width: 7px; height: 7px; border-radius: 50%; background: #4ade80; }
 
 /* ── App body ────────────────────────────────────────── */
 .app-body { display: flex; flex: 1; overflow: hidden; min-height: 0; }
@@ -418,6 +416,78 @@ textarea#queryInput::placeholder { color: var(--text-light); }
 }
 .kb-toc-list li::before { content: '▸'; color: var(--iu-crimson); flex-shrink: 0; margin-top: 1px; }
 
+/* ── KB Documents Section ────────────────────────────── */
+.kb-docs-section {
+  border-top: 1px solid var(--border); padding: 14px 20px;
+  grid-column: 1 / -1;
+}
+.kb-docs-list { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.kb-doc-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 7px 10px; border-radius: var(--radius-sm);
+  border: 1px solid var(--border); background: #FAFAFA;
+  transition: border-color .12s;
+}
+.kb-doc-item:hover { border-color: var(--iu-crimson); background: var(--bg-active); }
+.kb-doc-icon { font-size: 15px; flex-shrink: 0; }
+.kb-doc-name {
+  flex: 1; font-size: 13px; font-weight: 500; color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.kb-doc-meta { font-size: 11px; color: var(--text-muted); white-space: nowrap; flex-shrink: 0; }
+.kb-doc-download {
+  font-size: 12px; padding: 3px 9px; border-radius: 4px; text-decoration: none;
+  background: var(--iu-crimson); color: #fff; font-weight: 600; flex-shrink: 0;
+  transition: background .12s; white-space: nowrap;
+}
+.kb-doc-download:hover { background: var(--iu-crimson-d); }
+
+/* ── Sources Panel (chat response) ───────────────────── */
+.sources-panel {
+  margin-top: 8px; border: 1px solid var(--border); border-radius: var(--radius);
+  overflow: hidden; background: #fff;
+}
+.sources-toggle {
+  display: flex; align-items: center; gap: 7px; padding: 8px 14px;
+  cursor: pointer; font-size: 12px; font-weight: 600; color: var(--text-muted);
+  background: #F7F7F8; user-select: none; transition: background .1s;
+}
+.sources-toggle:hover { background: var(--bg-active); color: var(--iu-crimson); }
+.sources-toggle-arrow { margin-left: auto; transition: transform .2s; }
+.sources-toggle.open .sources-toggle-arrow { transform: rotate(180deg); }
+.sources-body { display: none; flex-direction: column; }
+.sources-body.open { display: flex; }
+.source-item { border-top: 1px solid var(--border); }
+.source-item-header {
+  display: flex; align-items: center; gap: 8px; padding: 8px 14px;
+  cursor: pointer; font-size: 12px; background: #fff;
+  transition: background .1s; user-select: none;
+}
+.source-item-header:hover { background: #F7F7F8; }
+.source-num {
+  font-size: 11px; font-weight: 700; background: var(--iu-crimson);
+  color: #fff; border-radius: 3px; padding: 1px 6px; flex-shrink: 0;
+}
+.source-domain-tag {
+  font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 3px;
+  flex-shrink: 0;
+}
+.source-label { flex: 1; color: var(--text); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.source-download {
+  font-size: 11px; padding: 2px 8px; border-radius: 4px; text-decoration: none;
+  border: 1px solid var(--border); color: var(--text-muted); font-weight: 600;
+  flex-shrink: 0; transition: all .12s; white-space: nowrap;
+}
+.source-download:hover { border-color: var(--iu-crimson); color: var(--iu-crimson); background: var(--bg-active); }
+.source-expand-arrow { font-size: 11px; color: var(--text-muted); flex-shrink: 0; transition: transform .18s; }
+.source-item-header.open .source-expand-arrow { transform: rotate(180deg); }
+.source-item-text {
+  display: none; padding: 10px 14px 12px 32px; font-size: 12px; line-height: 1.65;
+  color: var(--text-muted); background: #FAFAFA; border-top: 1px solid var(--border);
+  white-space: pre-wrap; font-family: var(--font);
+}
+.source-item-text.open { display: block; }
+
 /* ── Evaluation Tab ──────────────────────────────────── */
 .eval-content {
   flex: 1; overflow-y: auto; padding: 24px;
@@ -430,7 +500,7 @@ textarea#queryInput::placeholder { color: var(--text-light); }
 .progress-bar { height: 6px; background: #E0E0E0; border-radius: 3px; overflow: hidden; }
 .progress-fill { height: 100%; background: var(--iu-crimson); border-radius: 3px; transition: width .3s ease; }
 .progress-label { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
-.eval-summary { display: grid; grid-template-columns: repeat(4,1fr); gap: 12px; }
+.eval-summary { display: grid; grid-template-columns: repeat(4,1fr); gap: 12px; align-items: start; }
 .eval-stat {
   background: #fff; border: 1px solid var(--border);
   border-radius: var(--radius); padding: 14px 16px; box-shadow: var(--shadow);

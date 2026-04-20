@@ -19,8 +19,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from config import DEFAULT_MODEL, LLM_MAX_TOKENS_VERIFY
-from prompts import VERIFIER_SYSTEM, VERIFIER_USER
+from config import DEFAULT_MODEL, VERIFY_MODEL, LLM_MAX_TOKENS_VERIFY
+from prompts import VERIFIER_SYSTEM, VERIFIER_USER, SS_VERIFIER_SYSTEM, SS_VERIFIER_USER
 from utils import DomainAnswer, call_llm, format_evidence_summary, parse_json_response
 
 
@@ -64,7 +64,12 @@ def verify_answer(
     synthesized_answer: str,
     model: str = DEFAULT_MODEL,
     enabled: bool = True,
+    system_prompt: str | None = None,
+    user_prompt_override: str | None = None,
 ) -> VerificationResult:
+    # Verification only scores (produces small JSON) — always use the fast small model
+    # to avoid burning high-TPM quota on the user's chosen generation model.
+    model = VERIFY_MODEL
     """
     Verify the quality of the synthesized answer against the original query
     and retrieved evidence.
@@ -90,17 +95,24 @@ def verify_answer(
     )
     evidence_str = format_evidence_summary(domain_answers)
 
-    user_prompt = VERIFIER_USER.format(
-        original_query=original_query,
-        sub_questions=sub_q_str,
-        evidence_summary=evidence_str,
-        answer=synthesized_answer,
-    )
+    if user_prompt_override is not None:
+        user_prompt = user_prompt_override.format(
+            original_query=original_query,
+            evidence_summary=evidence_str,
+            answer=synthesized_answer,
+        )
+    else:
+        user_prompt = VERIFIER_USER.format(
+            original_query=original_query,
+            sub_questions=sub_q_str,
+            evidence_summary=evidence_str,
+            answer=synthesized_answer,
+        )
 
     try:
         raw = call_llm(
             messages=[{"role": "user", "content": user_prompt}],
-            system=VERIFIER_SYSTEM,
+            system=system_prompt or VERIFIER_SYSTEM,
             model=model,
             max_tokens=LLM_MAX_TOKENS_VERIFY,
         )

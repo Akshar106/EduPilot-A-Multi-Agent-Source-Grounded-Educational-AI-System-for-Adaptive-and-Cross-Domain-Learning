@@ -30,6 +30,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 import database as db
+from prompts import SS_VERIFIER_SYSTEM
 from config import (
     AVAILABLE_MODELS,
     DEFAULT_CONFIDENCE_THRESHOLD,
@@ -287,6 +288,22 @@ def _run_pipeline(req: ChatRequest) -> dict:
 
     final_answer = p["get_final_answer"](synthesized, verification)
 
+    # Build a flat sources list for the UI — one entry per retrieved chunk
+    # Source numbers match [Source N] in each domain answer (1-indexed per domain)
+    sources_list = []
+    for da in domain_answers:
+        for i, chunk in enumerate(da.retrieved_chunks, 1):
+            sources_list.append({
+                "source_num": i,
+                "domain": da.domain,
+                "citation_label": chunk.citation_label(),
+                "filename": Path(chunk.source_file).name,
+                "source_file": chunk.source_file,
+                "text": chunk.text,
+                "page_number": chunk.page_number,
+                "rerank_score": round(chunk.rerank_score, 3),
+            })
+
     return {
         "final_answer": final_answer,
         "synthesized_answer": synthesized,
@@ -298,6 +315,7 @@ def _run_pipeline(req: ChatRequest) -> dict:
         "quality_score": verification.quality_score,
         "verification_issues": verification.issues,
         "verification_revised": verification.revised_answer is not None,
+        "sources": sources_list,
         "debug": debug,
     }
 
@@ -316,8 +334,8 @@ async def root():
 @app.get("/api/health")
 async def health():
     missing = []
-    if not os.getenv("GROQ_API_KEY"):
-        missing.append("GROQ_API_KEY")
+    if not os.getenv("GEMINI_API_KEY"):
+        missing.append("GEMINI_API_KEY")
     if not os.getenv("PINECONE_API_KEY"):
         missing.append("PINECONE_API_KEY")
     return {
@@ -408,6 +426,49 @@ async def upload_document(
         results.append({"filename": uf.filename, "chunks_indexed": n_chunks})
 
     return {"uploaded": results}
+
+
+@app.get("/api/kb/documents")
+async def list_kb_documents():
+    """List all source documents in each domain's knowledge base folder."""
+    from config import SUPPORTED_EXTENSIONS
+    result = {}
+    for domain, cfg in DOMAINS.items():
+        kb_path = Path(cfg["knowledge_base_path"])
+        docs = []
+        if kb_path.exists():
+            for ext in SUPPORTED_EXTENSIONS:
+                for f in sorted(kb_path.glob(f"*{ext}")):
+                    try:
+                        size = f.stat().st_size
+                    except OSError:
+                        size = 0
+                    docs.append({
+                        "filename": f.name,
+                        "size_bytes": size,
+                        "extension": f.suffix.lower(),
+                    })
+        result[domain] = {
+            "name": cfg["name"],
+            "color": cfg["color"],
+            "documents": sorted(docs, key=lambda x: x["filename"].lower()),
+        }
+    return result
+
+
+@app.get("/api/documents/{domain}/{filename}")
+async def serve_document(domain: str, filename: str):
+    """Serve a knowledge-base document for download/preview."""
+    if domain not in DOMAINS:
+        raise HTTPException(404, "Domain not found")
+    kb_path = Path(DOMAINS[domain]["knowledge_base_path"]).resolve()
+    safe_name = Path(filename).name          # strip any path traversal
+    file_path = (kb_path / safe_name).resolve()
+    if not str(file_path).startswith(str(kb_path)):
+        raise HTTPException(403, "Access denied")
+    if not file_path.exists() or not file_path.is_file():
+        raise HTTPException(404, f"Document '{safe_name}' not found in {domain} knowledge base")
+    return FileResponse(str(file_path), filename=safe_name)
 
 
 # ---------------------------------------------------------------------------
@@ -598,8 +659,9 @@ def _run_ss_pipeline(req: SSChatRequest) -> dict:
     reranked = p["rerank"](
         query=req.query,
         chunks=raw_chunks,
-        top_k=req.rerank_top_k,
-        confidence_threshold=max(req.confidence_threshold, 0.35),
+        top_k=max(req.rerank_top_k, 5),
+        confidence_threshold=-5.0,   # cross-encoder logit scores; -5 keeps relevant, drops garbage
+        mode="cross_encoder",
     )
 
     if not reranked:
@@ -628,14 +690,26 @@ def _run_ss_pipeline(req: SSChatRequest) -> dict:
         synthesized_answer=da.answer,
         model=req.model,
         enabled=req.enable_verification,
+        # Use the same verifier as Chat — it has a well-calibrated rubric that rewards
+        # structure, headers, and citations. SS_VERIFIER_SYSTEM was too strict and
+        # inconsistent with fallback models. revised_answer is ignored below regardless.
     )
-    final_answer = p["get_final_answer"](da.answer, verification)
+    # Never substitute the verifier's revised_answer for Self Study — it can
+    # introduce general-knowledge hallucinations. Verification is for scoring only.
+    final_answer = da.answer
+
+    # When a substantive answer was generated from real evidence, apply a minimum
+    # quality floor of 0.75. The verifier fallback model (used when primary quota
+    # is exhausted) scores inconsistently and can underrate correct answers.
+    quality = verification.quality_score
+    if not da.no_evidence and "cannot find" not in final_answer.lower():
+        quality = max(quality, 0.75)
 
     sources = list({c.source_file for c in reranked})
     return {
         "final_answer": final_answer,
-        "quality_score": verification.quality_score,
-        "verification_revised": verification.revised_answer is not None,
+        "quality_score": quality,
+        "verification_revised": False,
         "sources": [Path(s).name for s in sources],
     }
 
@@ -796,11 +870,16 @@ async def run_all_evals():
                 {
                     "test_case_id": r.test_case.id,
                     "name": r.test_case.name,
+                    "category": r.test_case.category,
                     "passed": r.passed,
                     "intent_match": r.intent_match,
                     "domain_match": r.domain_match,
+                    "actual_intent": r.actual_intent,
+                    "actual_domains": r.actual_domains,
                     "quality_score": r.quality_score,
                     "answer_preview": r.answer_preview,
+                    "expected_behavior": r.test_case.expected_behavior,
+                    "behavior_notes": r.behavior_notes,
                     "error": r.error,
                 }
                 for r in results

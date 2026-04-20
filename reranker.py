@@ -109,6 +109,12 @@ def rerank_cross_encoder(
 ) -> list[RetrievedChunk]:
     """
     Rerank using a cross-encoder model if available; falls back to keyword reranking.
+
+    The cross-encoder (ms-marco-MiniLM-L-6-v2) outputs raw logits, not probabilities:
+      ~7  = highly relevant
+      ~0  = borderline
+      ~-7 = irrelevant
+    The caller should pass confidence_threshold as a logit value (e.g. -5.0) not a 0–1 float.
     """
     model = _get_cross_encoder()
     if model is None:
@@ -125,7 +131,8 @@ def rerank_cross_encoder(
     chunks.sort(key=lambda c: c.rerank_score, reverse=True)
     filtered = [c for c in chunks if c.rerank_score >= confidence_threshold]
     if not filtered and chunks:
-        filtered = [chunks[0]]
+        # Keep top_k best chunks rather than just 1 — single chunk is insufficient context
+        filtered = chunks[:top_k]
     return filtered[:top_k]
 
 

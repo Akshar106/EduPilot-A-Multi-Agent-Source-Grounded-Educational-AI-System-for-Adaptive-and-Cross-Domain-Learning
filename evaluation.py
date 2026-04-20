@@ -15,6 +15,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
+from config import DEFAULT_MODEL
+
 
 # ---------------------------------------------------------------------------
 # Test case definition
@@ -241,7 +243,7 @@ TEST_CASES: list[TestCase] = [
 def run_evaluation(
     test_case: TestCase,
     pipeline_fn: Callable,
-    model: str = "claude-opus-4-6",
+    model: str = DEFAULT_MODEL,
     top_k: int = 5,
     rerank_top_k: int = 3,
     enable_verification: bool = True,
@@ -249,16 +251,7 @@ def run_evaluation(
     """
     Run a single test case through the pipeline and evaluate results.
 
-    Args:
-        test_case: The TestCase to evaluate.
-        pipeline_fn: The main pipeline function (query → PipelineResult).
-        model: Claude model to use.
-        top_k: Retrieval top-k.
-        rerank_top_k: Rerank top-k.
-        enable_verification: Whether to run verification.
-
-    Returns:
-        TestResult with pass/fail and detailed notes.
+    pipeline_fn returns a plain dict from _run_pipeline — access keys with .get().
     """
     try:
         result = pipeline_fn(
@@ -278,48 +271,54 @@ def run_evaluation(
             error=str(exc),
         )
 
+    # _run_pipeline returns a dict — use .get() throughout
+    actual_intent = result.get("intent_type", "")
+    actual_domains = result.get("detected_domains") or []
+    needs_clarification = result.get("needs_clarification", False)
+    is_course_related = result.get("is_course_related", True)
+    final_answer = result.get("final_answer", "")
+    quality_score = float(result.get("quality_score", 0.0))
+
     # Evaluate intent
     intent_match = (
         test_case.expected_intent == "any"
-        or result.intent_type == test_case.expected_intent
+        or actual_intent == test_case.expected_intent
     )
 
     # Evaluate domains
     if not test_case.expected_domains:
         # Expected no domain — pass if no domains detected OR clarification/OOD flag
         domain_match = (
-            not result.detected_domains
-            or result.needs_clarification
-            or not result.is_course_related
+            not actual_domains
+            or needs_clarification
+            or not is_course_related
         )
     else:
-        # All expected domains should appear
-        domain_match = all(d in result.detected_domains for d in test_case.expected_domains)
+        # All expected domains should appear in what was detected
+        domain_match = all(d in actual_domains for d in test_case.expected_domains)
 
-    # Run optional programmatic check
+    # Run optional programmatic check (e.g. TC-09 citation check)
     extra_pass = True
     extra_note = ""
     if test_case.check_fn:
         try:
-            extra_pass = bool(test_case.check_fn(result.final_answer))
+            extra_pass = bool(test_case.check_fn(final_answer))
             if not extra_pass:
-                extra_note = " | Programmatic check FAILED."
+                extra_note = " | Programmatic check FAILED (e.g. missing citation)."
         except Exception as exc:
             extra_note = f" | Check error: {exc}"
 
     passed = intent_match and domain_match and extra_pass
 
-    # Build notes
+    # Build behavior notes
     notes_parts = [test_case.expected_behavior]
     if not intent_match:
         notes_parts.append(
-            f"INTENT MISMATCH: expected '{test_case.expected_intent}', "
-            f"got '{result.intent_type}'"
+            f"INTENT MISMATCH: expected '{test_case.expected_intent}', got '{actual_intent}'"
         )
     if not domain_match:
         notes_parts.append(
-            f"DOMAIN MISMATCH: expected {test_case.expected_domains}, "
-            f"got {result.detected_domains}"
+            f"DOMAIN MISMATCH: expected {test_case.expected_domains}, got {actual_domains}"
         )
     if extra_note:
         notes_parts.append(extra_note)
@@ -330,16 +329,16 @@ def run_evaluation(
         intent_match=intent_match,
         domain_match=domain_match,
         behavior_notes=" | ".join(notes_parts),
-        actual_intent=result.intent_type,
-        actual_domains=result.detected_domains,
-        answer_preview=result.final_answer[:500],
-        quality_score=result.quality_score,
+        actual_intent=actual_intent,
+        actual_domains=actual_domains,
+        answer_preview=final_answer[:500],
+        quality_score=quality_score,
     )
 
 
 def run_all_evaluations(
     pipeline_fn: Callable,
-    model: str = "claude-opus-4-6",
+    model: str = DEFAULT_MODEL,
     top_k: int = 5,
     rerank_top_k: int = 3,
     enable_verification: bool = True,
@@ -379,9 +378,20 @@ def summary_stats(results: list[TestResult]) -> dict:
     passed = sum(1 for r in results if r.passed)
     intent_ok = sum(1 for r in results if r.intent_match)
     domain_ok = sum(1 for r in results if r.domain_match)
-    avg_quality = (
+
+    # Overall avg includes all tests (edge cases score 0 by design)
+    avg_quality_all = (
         sum(r.quality_score for r in results) / total if total else 0.0
     )
+
+    # Answer quality: only tests that actually generated an answer (quality_score > 0)
+    # Edge-case tests (ambiguous, OOD) correctly return 0 — exclude them from answer quality
+    answer_tests = [r for r in results if r.quality_score > 0]
+    avg_answer_quality = (
+        sum(r.quality_score for r in answer_tests) / len(answer_tests)
+        if answer_tests else 0.0
+    )
+
     categories: dict[str, dict] = {}
     for r in results:
         cat = r.test_case.category
@@ -398,6 +408,8 @@ def summary_stats(results: list[TestResult]) -> dict:
         "pass_rate": round(passed / total * 100, 1) if total else 0,
         "intent_accuracy": round(intent_ok / total * 100, 1) if total else 0,
         "domain_accuracy": round(domain_ok / total * 100, 1) if total else 0,
-        "avg_quality_score": round(avg_quality, 3),
+        "avg_quality_score": round(avg_quality_all, 3),
+        "avg_answer_quality": round(avg_answer_quality, 3),
+        "answer_tests_count": len(answer_tests),
         "by_category": categories,
     }
