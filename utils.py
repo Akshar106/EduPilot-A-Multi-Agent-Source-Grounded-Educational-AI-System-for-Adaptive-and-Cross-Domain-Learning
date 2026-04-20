@@ -118,8 +118,12 @@ def call_llm(
 ) -> str:
     """
     Call the Gemini API and return the assistant text.
+    Auto-retries on per-minute limits and falls back to next model on daily exhaustion.
     Raises on API errors so callers can handle gracefully.
     """
+    import re as _re, sys as _sys, time as _time
+    from config import AVAILABLE_MODELS
+
     api_key = GEMINI_API_KEY or os.environ.get("GEMINI_API_KEY", "")
     if not api_key:
         raise ValueError(
@@ -135,24 +139,53 @@ def call_llm(
         role = "user" if msg["role"] == "user" else "model"
         contents.append(genai_types.Content(role=role, parts=[genai_types.Part(text=msg["content"])]))
 
-    config_kwargs: dict = dict(
-        max_output_tokens=max_tokens,
-        temperature=0.1,
-        system_instruction=system,
-        safety_settings=[
-            genai_types.SafetySetting(category="HARM_CATEGORY_HARASSMENT",        threshold="BLOCK_NONE"),
-            genai_types.SafetySetting(category="HARM_CATEGORY_HATE_SPEECH",       threshold="BLOCK_NONE"),
-            genai_types.SafetySetting(category="HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold="BLOCK_NONE"),
-            genai_types.SafetySetting(category="HARM_CATEGORY_DANGEROUS_CONTENT", threshold="BLOCK_NONE"),
-        ],
-    )
-    # Gemini 2.5 models are thinking models — disable thinking for RAG (saves quota)
-    if "2.5" in model:
-        config_kwargs["thinking_config"] = genai_types.ThinkingConfig(thinking_budget=0)
+    def _make_config(m: str) -> genai_types.GenerateContentConfig:
+        kw: dict = dict(
+            max_output_tokens=max_tokens,
+            temperature=0.1,
+            system_instruction=system,
+            safety_settings=[
+                genai_types.SafetySetting(category="HARM_CATEGORY_HARASSMENT",        threshold="BLOCK_NONE"),
+                genai_types.SafetySetting(category="HARM_CATEGORY_HATE_SPEECH",       threshold="BLOCK_NONE"),
+                genai_types.SafetySetting(category="HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold="BLOCK_NONE"),
+                genai_types.SafetySetting(category="HARM_CATEGORY_DANGEROUS_CONTENT", threshold="BLOCK_NONE"),
+            ],
+        )
+        if "2.5" in m:
+            kw["thinking_config"] = genai_types.ThinkingConfig(thinking_budget=0)
+        return genai_types.GenerateContentConfig(**kw)
 
-    config = genai_types.GenerateContentConfig(**config_kwargs)
-    response = client.models.generate_content(model=model, contents=contents, config=config)
-    return response.text
+    # Build model fallback list: requested model first, then remaining AVAILABLE_MODELS
+    fallback_order = [model] + [m for m in AVAILABLE_MODELS if m != model]
+
+    last_exc: Exception | None = None
+    for current_model in fallback_order:
+        config = _make_config(current_model)
+        for attempt in range(3):
+            try:
+                response = client.models.generate_content(model=current_model, contents=contents, config=config)
+                if current_model != model:
+                    print(f"[EduPilot] Fell back to {current_model} (original: {model})", file=_sys.stderr, flush=True)
+                return response.text
+            except Exception as exc:
+                err = str(exc)
+                last_exc = exc
+                is_daily = "PerDay" in err or "PerDayPerProject" in err
+                is_quota = "429" in err or "resource_exhausted" in err.lower()
+                if is_daily:
+                    # Daily quota exhausted for this model — try next model
+                    print(f"[EduPilot] Daily quota exhausted for {current_model}, trying next model", file=_sys.stderr, flush=True)
+                    break
+                if is_quota and attempt < 2:
+                    # Per-minute limit — wait and retry same model
+                    delay_match = _re.search(r"retry in (\d+(?:\.\d+)?)s", err, _re.IGNORECASE)
+                    wait = float(delay_match.group(1)) + 2 if delay_match else 15
+                    print(f"[EduPilot] RPM limit on {current_model} — retrying in {wait:.0f}s", file=_sys.stderr, flush=True)
+                    _time.sleep(wait)
+                    continue
+                raise  # non-quota error — propagate immediately
+
+    raise last_exc  # all models exhausted
 
 
 def parse_json_response(raw: str) -> dict:

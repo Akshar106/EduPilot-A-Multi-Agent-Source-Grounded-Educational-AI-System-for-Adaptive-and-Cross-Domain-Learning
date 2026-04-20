@@ -1373,7 +1373,7 @@ async function ssRunQuery(query, sourceFilter) {
     const result = await post('/api/self-study/chat', {
       query,
       ss_session_id: SS.activeSessionId,
-      model: S.config?.model || 'llama-3.3-70b-versatile',
+      model: S.config?.model || S.config?.default_model || 'gemini-2.5-flash',
       top_k: parseInt($('topK').value),
       rerank_top_k: parseInt($('rerankK').value),
       confidence_threshold: parseFloat($('conf').value),

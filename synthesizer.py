@@ -19,13 +19,18 @@ def _friendly_error(exc: Exception) -> str:
     print(f"\n[EduPilot ERROR] {type(exc).__name__}: {exc}\n", file=sys.stderr, flush=True)
     msg = str(exc).lower()
     if "rate limit" in msg or "429" in msg or "quota" in msg or "tokens per day" in msg or "tpd" in msg:
+        is_daily = "perday" in msg or "per_day" in msg or "daily" in msg
+        if is_daily:
+            return (
+                "⚠️ **Daily quota exhausted** — you've used all free requests for today on this model.\n\n"
+                "**What you can do:**\n"
+                "- Switch to **`gemini-2.0-flash-lite`** in the sidebar (separate daily bucket, 1500 req/day)\n"
+                "- Wait until **midnight UTC** for the daily quota to reset\n"
+                "- Get a fresh API key at [Google AI Studio](https://aistudio.google.com)"
+            )
         return (
-            "⚠️ **API rate limit reached** — the AI service quota has been exhausted.\n\n"
-            "**What you can do:**\n"
-            "- Wait a few minutes or until the quota resets (usually midnight UTC)\n"
-            "- Switch to **`gemini-2.5-flash`** or **`gemini-2.5-flash-lite`** in the sidebar (separate quota from 2.0 models)\n"
-            "- Or wait until midnight UTC for the daily quota to reset\n"
-            "- Check/create a fresh API key at [Google AI Studio](https://aistudio.google.com)"
+            "⚠️ **Per-minute rate limit hit** — too many requests in the last 60 seconds.\n\n"
+            "Please wait ~15 seconds and try again. EduPilot auto-retries on per-minute limits."
         )
     if "authentication" in msg or "401" in msg or "api key" in msg or "api_key" in msg:
         return "⚠️ **API authentication error** — please check your `GEMINI_API_KEY` in the `.env` file."

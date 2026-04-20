@@ -153,8 +153,8 @@ SUPPORTED_EXTENSIONS: list[str] = [".pdf", ".txt", ".md", ".docx"]
 # LLM / Embedding models
 # ---------------------------------------------------------------------------
 # Gemini model IDs  (https://ai.google.dev/gemini-api/docs/models)
-DEFAULT_MODEL: str = "gemini-2.5-flash"           # latest model, separate quota from 2.0
-VERIFY_MODEL: str  = "gemini-2.5-flash"          # same model — cheap enough for scoring
+DEFAULT_MODEL: str = "gemini-2.0-flash"           # 1500 req/day free — best daily quota
+VERIFY_MODEL: str  = "gemini-2.0-flash"          # same model — cheap enough for scoring
 EMBEDDING_MODEL: str = "all-MiniLM-L6-v2"
 
 # Groq counts reserved output tokens against TPM even if the response is shorter.
@@ -174,8 +174,8 @@ ENABLE_VERIFICATION_DEFAULT: bool = True
 # Available Gemini models (for sidebar dropdown)
 # ---------------------------------------------------------------------------
 AVAILABLE_MODELS: list[str] = [
-    "gemini-2.5-flash",           # latest — high quality, separate quota from 2.0 models
-    "gemini-2.5-flash-lite",      # ultra-fast, highest free quota
-    "gemini-2.0-flash",           # solid quality, ~1M tokens/day free
-    "gemini-2.0-flash-lite",      # fast, high free quota
+    "gemini-2.0-flash",           # best daily quota — 1500 req/day free
+    "gemini-2.0-flash-lite",      # highest free quota, fast
+    "gemini-2.5-flash",           # latest model — only 20 req/day free
+    "gemini-2.5-flash-lite",      # latest lite — only 20 req/day free
 ]
