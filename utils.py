@@ -14,13 +14,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
-from groq import Groq
+from google import genai
+from google.genai import types as genai_types
 
 from config import (
     CHUNK_OVERLAP,
     CHUNK_SIZE,
     DEFAULT_MODEL,
-    GROQ_API_KEY,
+    GEMINI_API_KEY,
     LLM_MAX_TOKENS_CLASSIFY,
     SUPPORTED_EXTENSIONS,
 )
@@ -55,8 +56,20 @@ class RetrievedChunk:
     metadata: dict = field(default_factory=dict)
 
     def citation_label(self) -> str:
-        """Human-readable citation string."""
-        base = Path(self.source_file).stem.replace("_", " ").title()
+        """Human-readable citation string, preserving acronyms like ML, LLMs, AML."""
+        import re
+        stem = Path(self.source_file).stem
+        # Replace separators with spaces
+        stem = re.sub(r"[-_]+", " ", stem)
+        words = stem.split()
+        formatted = []
+        for w in words:
+            # Preserve all-uppercase tokens (ML, AML, LLMs, SP26, BCNF…)
+            if re.match(r'^[A-Z][A-Z0-9s]*$', w):
+                formatted.append(w)
+            else:
+                formatted.append(w.capitalize())
+        base = " ".join(formatted)
         if self.page_number:
             return f"{base}, p.{self.page_number}"
         return base
@@ -104,31 +117,42 @@ def call_llm(
     max_tokens: int = LLM_MAX_TOKENS_CLASSIFY,
 ) -> str:
     """
-    Call the Groq API and return the assistant text.
+    Call the Gemini API and return the assistant text.
     Raises on API errors so callers can handle gracefully.
     """
-    api_key = GROQ_API_KEY or os.environ.get("GROQ_API_KEY", "")
+    api_key = GEMINI_API_KEY or os.environ.get("GEMINI_API_KEY", "")
     if not api_key:
         raise ValueError(
-            "GROQ_API_KEY environment variable not set. "
-            "Add it to your .env file or export it before running EduPilot."
+            "GEMINI_API_KEY environment variable not set. "
+            "Get a free key at https://aistudio.google.com and add it to your .env file."
         )
 
-    client = Groq(api_key=api_key)
+    client = genai.Client(api_key=api_key)
 
-    # Groq uses the OpenAI messages format; prepend system as a system message
-    full_messages: list[dict] = []
-    if system:
-        full_messages.append({"role": "system", "content": system})
-    full_messages.extend(messages)
+    # Build contents from OpenAI-style messages (user/assistant → user/model)
+    contents = []
+    for msg in messages:
+        role = "user" if msg["role"] == "user" else "model"
+        contents.append(genai_types.Content(role=role, parts=[genai_types.Part(text=msg["content"])]))
 
-    response = client.chat.completions.create(
-        model=model,
-        messages=full_messages,
-        max_tokens=max_tokens,
+    config_kwargs: dict = dict(
+        max_output_tokens=max_tokens,
+        temperature=0.1,
+        system_instruction=system,
+        safety_settings=[
+            genai_types.SafetySetting(category="HARM_CATEGORY_HARASSMENT",        threshold="BLOCK_NONE"),
+            genai_types.SafetySetting(category="HARM_CATEGORY_HATE_SPEECH",       threshold="BLOCK_NONE"),
+            genai_types.SafetySetting(category="HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold="BLOCK_NONE"),
+            genai_types.SafetySetting(category="HARM_CATEGORY_DANGEROUS_CONTENT", threshold="BLOCK_NONE"),
+        ],
     )
+    # Gemini 2.5 models are thinking models — disable thinking for RAG (saves quota)
+    if "2.5" in model:
+        config_kwargs["thinking_config"] = genai_types.ThinkingConfig(thinking_budget=0)
 
-    return response.choices[0].message.content or ""
+    config = genai_types.GenerateContentConfig(**config_kwargs)
+    response = client.models.generate_content(model=model, contents=contents, config=config)
+    return response.text
 
 
 def parse_json_response(raw: str) -> dict:

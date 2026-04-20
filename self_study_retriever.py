@@ -162,8 +162,8 @@ class SelfStudyRetriever:
         if total == 0:
             return []
 
-        n_candidates = min(top_k * 3, total)
-        # Fetch more candidates when filtering so we have enough after the filter
+        # Fetch a large candidate pool so the cross-encoder has the best possible set to rank
+        n_candidates = min(top_k * 6, total)
         fetch_k = min(n_candidates * 3 if source_filter else n_candidates, total)
 
         sem_results = self._semantic_search(query, fetch_k)

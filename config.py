@@ -13,7 +13,12 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 try:
     from dotenv import load_dotenv
-    load_dotenv(Path(__file__).parent / ".env")
+    # Search current dir and up to 3 parents (handles git worktrees)
+    _here = Path(__file__).resolve().parent
+    for _candidate in [_here, _here.parent, _here.parent.parent, _here.parent.parent.parent]:
+        if (_candidate / ".env").exists():
+            load_dotenv(_candidate / ".env")
+            break
 except ImportError:
     pass  # dotenv not installed; rely on shell environment
 
@@ -27,6 +32,7 @@ KNOWLEDGE_BASE_DIR = BASE_DIR / "knowledge_base"
 # API keys (read from environment / .env)
 # ---------------------------------------------------------------------------
 GROQ_API_KEY: str      = os.getenv("GROQ_API_KEY", "")
+GEMINI_API_KEY: str    = os.getenv("GEMINI_API_KEY", "")
 PINECONE_API_KEY: str  = os.getenv("PINECONE_API_KEY", "")
 
 # ---------------------------------------------------------------------------
@@ -127,10 +133,10 @@ DOMAINS: dict[str, dict] = {
 # ---------------------------------------------------------------------------
 # Retrieval parameters
 # ---------------------------------------------------------------------------
-DEFAULT_TOP_K: int = 5
-DEFAULT_RERANK_TOP_K: int = 3
-CHUNK_SIZE: int = 600
-CHUNK_OVERLAP: int = 80
+DEFAULT_TOP_K: int = 8
+DEFAULT_RERANK_TOP_K: int = 5
+CHUNK_SIZE: int = 800
+CHUNK_OVERLAP: int = 150
 
 # Hybrid search blend (must sum to 1.0)
 SEMANTIC_WEIGHT: float = 0.60
@@ -146,14 +152,18 @@ SUPPORTED_EXTENSIONS: list[str] = [".pdf", ".txt", ".md", ".docx"]
 # ---------------------------------------------------------------------------
 # LLM / Embedding models
 # ---------------------------------------------------------------------------
-# Groq model IDs  (https://console.groq.com/docs/models)
-DEFAULT_MODEL: str = "llama-3.3-70b-versatile"
+# Gemini model IDs  (https://ai.google.dev/gemini-api/docs/models)
+DEFAULT_MODEL: str = "gemini-2.5-flash"           # latest model, separate quota from 2.0
+VERIFY_MODEL: str  = "gemini-2.5-flash"          # same model — cheap enough for scoring
 EMBEDDING_MODEL: str = "all-MiniLM-L6-v2"
 
-LLM_MAX_TOKENS_CLASSIFY: int = 1024
-LLM_MAX_TOKENS_GENERATE: int = 8192   # long detailed answers
-LLM_MAX_TOKENS_SYNTH: int = 8192      # comprehensive cross-domain synthesis
-LLM_MAX_TOKENS_VERIFY: int = 8192     # room for full revised answers
+# Groq counts reserved output tokens against TPM even if the response is shorter.
+# Keep these tight — they are upper bounds, not targets.
+LLM_MAX_TOKENS_CLASSIFY: int = 512
+LLM_MAX_TOKENS_GENERATE: int = 3500   # domain chat answers — high for quality
+LLM_MAX_TOKENS_SS: int       = 4096   # self-study: user wants long, detailed answers
+LLM_MAX_TOKENS_SYNTH: int    = 3500   # cross-domain synthesis — high for quality
+LLM_MAX_TOKENS_VERIFY: int   = 768    # JSON blob with scores
 
 # ---------------------------------------------------------------------------
 # Verification
@@ -161,12 +171,11 @@ LLM_MAX_TOKENS_VERIFY: int = 8192     # room for full revised answers
 ENABLE_VERIFICATION_DEFAULT: bool = True
 
 # ---------------------------------------------------------------------------
-# Available Groq models (for sidebar dropdown)
+# Available Gemini models (for sidebar dropdown)
 # ---------------------------------------------------------------------------
 AVAILABLE_MODELS: list[str] = [
-    "llama-3.3-70b-versatile",    # best quality — 128K context
-    "llama-3.1-70b-versatile",    # slightly older, similar quality
-    "mixtral-8x7b-32768",         # good for long-context tasks
-    "llama-3.1-8b-instant",       # fast / low-latency
-    "gemma2-9b-it",               # lightweight Google model
+    "gemini-2.5-flash",           # latest — high quality, separate quota from 2.0 models
+    "gemini-2.5-flash-lite",      # ultra-fast, highest free quota
+    "gemini-2.0-flash",           # solid quality, ~1M tokens/day free
+    "gemini-2.0-flash-lite",      # fast, high free quota
 ]

@@ -10,7 +10,30 @@ Both use Claude and stay strictly within the retrieved evidence.
 
 from __future__ import annotations
 
-from config import DEFAULT_MODEL, DOMAINS, LLM_MAX_TOKENS_GENERATE, LLM_MAX_TOKENS_SYNTH
+from config import DEFAULT_MODEL, DOMAINS, LLM_MAX_TOKENS_GENERATE, LLM_MAX_TOKENS_SS, LLM_MAX_TOKENS_SYNTH
+
+
+def _friendly_error(exc: Exception) -> str:
+    """Convert raw API exceptions into clean user-facing messages."""
+    import sys
+    print(f"\n[EduPilot ERROR] {type(exc).__name__}: {exc}\n", file=sys.stderr, flush=True)
+    msg = str(exc).lower()
+    if "rate limit" in msg or "429" in msg or "quota" in msg or "tokens per day" in msg or "tpd" in msg:
+        return (
+            "⚠️ **API rate limit reached** — the AI service quota has been exhausted.\n\n"
+            "**What you can do:**\n"
+            "- Wait a few minutes or until the quota resets (usually midnight UTC)\n"
+            "- Switch to **`gemini-2.5-flash`** or **`gemini-2.5-flash-lite`** in the sidebar (separate quota from 2.0 models)\n"
+            "- Or wait until midnight UTC for the daily quota to reset\n"
+            "- Check/create a fresh API key at [Google AI Studio](https://aistudio.google.com)"
+        )
+    if "authentication" in msg or "401" in msg or "api key" in msg or "api_key" in msg:
+        return "⚠️ **API authentication error** — please check your `GEMINI_API_KEY` in the `.env` file."
+    if "gemini_api_key" in msg or "not set" in msg:
+        return "⚠️ **GEMINI_API_KEY not configured** — add your key to the `.env` file and restart the server. Get a free key at [aistudio.google.com](https://aistudio.google.com)."
+    if "timeout" in msg or "connection" in msg:
+        return "⚠️ **Connection timeout** — the AI service is temporarily unavailable. Please try again in a moment."
+    return f"⚠️ **Error generating answer** — {exc}"
 from prompts import (
     DOMAIN_AGENT_SYSTEM,
     DOMAIN_AGENT_USER,
@@ -96,7 +119,7 @@ def generate_domain_answer(
                 max_tokens=LLM_MAX_TOKENS_GENERATE,
             )
         except Exception as exc:
-            answer_text = NO_EVIDENCE_RESPONSE + f"\n\n_(Error: {exc})_"
+            answer_text = _friendly_error(exc)
 
         return DomainAnswer(
             domain=domain,
@@ -124,10 +147,7 @@ def generate_domain_answer(
             max_tokens=LLM_MAX_TOKENS_GENERATE,
         )
     except Exception as exc:
-        answer_text = (
-            f"I encountered an error generating the answer: {exc}\n\n"
-            f"Retrieved context was available ({len(retrieved_chunks)} chunks)."
-        )
+        answer_text = _friendly_error(exc)
 
     # Extract citation labels from chunks
     citations = [c.citation_label() for c in retrieved_chunks]
@@ -173,7 +193,7 @@ def synthesize_answers(
         da = domain_answers[0]
         if da.no_evidence:
             return NO_EVIDENCE_RESPONSE
-        return _add_reference_list(da.answer, da)
+        return da.answer  # prompt already includes ## References section
 
     # Filter out completely empty answers
     valid_answers = [da for da in domain_answers if not da.no_evidence]
@@ -199,12 +219,13 @@ def synthesize_answers(
             max_tokens=LLM_MAX_TOKENS_SYNTH,
         )
     except Exception as exc:
-        # Fallback: concatenate answers with headers
-        parts = []
+        # Rate limit or API error — show friendly message + raw domain answers as fallback
+        err_msg = _friendly_error(exc)
+        parts = [err_msg, "\n\n---\n\n*Partial answers retrieved before error:*"]
         for da in valid_answers:
             domain_name = DOMAINS.get(da.domain, {}).get("name", da.domain)
             parts.append(f"## {domain_name}\n\n{da.answer}")
-        synthesized = "\n\n---\n\n".join(parts)
+        synthesized = "\n\n".join(parts)
 
     return synthesized
 
@@ -245,7 +266,7 @@ def generate_ss_answer(
             messages=[{"role": "user", "content": user_prompt}],
             system=SS_AGENT_SYSTEM,
             model=model,
-            max_tokens=LLM_MAX_TOKENS_GENERATE,
+            max_tokens=LLM_MAX_TOKENS_SS,
         )
     except Exception as exc:
         answer_text = f"Error generating answer: {exc}"
