@@ -7,3 +7,4 @@ vector_stores/
 *.db-shm
 *.db-wal
 __pycache__/
+venv

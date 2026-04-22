@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>EduPilot — IU AI Tutor</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎓</text></svg>">
-  <link rel="stylesheet" href="/static/style.css?v=6" />
+  <link rel="stylesheet" href="/static/style.css?v=7" />
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css" />
   <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
@@ -42,10 +42,14 @@
         </div>
 
 
-        <!-- 3. SETTINGS at bottom — NO model selector -->
+        <!-- 3. SETTINGS at bottom -->
         <div class="sidebar-section">
           <div class="sidebar-section-title">Settings</div>
           <div class="settings-group">
+            <div>
+              <div class="field-label">Model</div>
+              <select id="modelSelect" class="select" style="width:100%;font-size:12px"></select>
+            </div>
             <div>
               <div class="field-label">Retrieval Top-K <span id="topKVal" class="val-badge">5</span></div>
               <input type="range" id="topK" min="2" max="10" value="5" class="slider" />
@@ -320,6 +324,6 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=5"></script>
+  <script src="/static/app.js?v=6"></script>
 </body>
 </html>

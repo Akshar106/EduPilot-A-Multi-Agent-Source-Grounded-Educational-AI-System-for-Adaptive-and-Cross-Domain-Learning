@@ -347,8 +347,10 @@ async def health():
 
 @app.get("/api/config")
 async def get_config():
+    from config import GROQ_MODELS
     return {
         "available_models": AVAILABLE_MODELS,
+        "groq_models": GROQ_MODELS,
         "default_model": DEFAULT_MODEL,
         "domains": {
             k: {
@@ -594,6 +596,12 @@ def _run_single_eval(tc_id: str) -> dict:
         "answer_preview": r.answer_preview,
         "error": r.error,
         "expected_behavior": tc.expected_behavior,
+        # new metrics
+        "retrieval_hit_rate":  r.retrieval_hit_rate,
+        "faithfulness_score":  r.faithfulness_score,
+        "citation_accuracy":   r.citation_accuracy,
+        "answer_relevance":    r.answer_relevance,
+        "latency_ms":          r.latency_ms,
     }
 
 
@@ -881,6 +889,12 @@ async def run_all_evals():
                     "expected_behavior": r.test_case.expected_behavior,
                     "behavior_notes": r.behavior_notes,
                     "error": r.error,
+                    # new metrics
+                    "retrieval_hit_rate": r.retrieval_hit_rate,
+                    "faithfulness_score": r.faithfulness_score,
+                    "citation_accuracy":  r.citation_accuracy,
+                    "answer_relevance":   r.answer_relevance,
+                    "latency_ms":         r.latency_ms,
                 }
                 for r in results
             ],

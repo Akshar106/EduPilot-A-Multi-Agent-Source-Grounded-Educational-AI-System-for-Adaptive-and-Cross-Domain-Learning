@@ -153,8 +153,8 @@ SUPPORTED_EXTENSIONS: list[str] = [".pdf", ".txt", ".md", ".docx"]
 # LLM / Embedding models
 # ---------------------------------------------------------------------------
 # Gemini model IDs  (https://ai.google.dev/gemini-api/docs/models)
-DEFAULT_MODEL: str = "gemini-2.0-flash"           # 1500 req/day free — best daily quota
-VERIFY_MODEL: str  = "gemini-2.0-flash"          # same model — cheap enough for scoring
+DEFAULT_MODEL: str = "llama-3.3-70b-versatile"    # Groq — free, fast, no daily cap issues
+VERIFY_MODEL: str  = "llama-3.3-70b-versatile"   # Groq — same large model; small models anchor scores
 EMBEDDING_MODEL: str = "all-MiniLM-L6-v2"
 
 # Groq counts reserved output tokens against TPM even if the response is shorter.
@@ -171,11 +171,23 @@ LLM_MAX_TOKENS_VERIFY: int   = 768    # JSON blob with scores
 ENABLE_VERIFICATION_DEFAULT: bool = True
 
 # ---------------------------------------------------------------------------
-# Available Gemini models (for sidebar dropdown)
+# Available models (for sidebar dropdown)
+# Groq models are prefixed with "groq:" to distinguish them from Gemini.
 # ---------------------------------------------------------------------------
 AVAILABLE_MODELS: list[str] = [
-    "gemini-2.0-flash",           # best daily quota — 1500 req/day free
-    "gemini-2.0-flash-lite",      # highest free quota, fast
-    "gemini-2.5-flash",           # latest model — only 20 req/day free
-    "gemini-2.5-flash-lite",      # latest lite — only 20 req/day free
+    # ── Groq (free, unlimited, fast) ────────────────────────────────────────
+    "llama-3.3-70b-versatile",    # Groq: best quality, 14,400 req/day free
+    "llama-3.1-8b-instant",       # Groq: fastest, very high free quota
+    "gemma2-9b-it",               # Groq: Google Gemma 2, high free quota
+    # ── Gemini (Google AI Studio) ───────────────────────────────────────────
+    "gemini-2.0-flash",           # 1500 req/day free
+    "gemini-2.0-flash-lite",      # highest Gemini free quota
+    "gemini-2.5-flash",           # latest — only 20 req/day free
+]
+
+# Groq models — used to detect provider in call_llm
+GROQ_MODELS: list[str] = [
+    "llama-3.3-70b-versatile",
+    "llama-3.1-8b-instant",
+    "gemma2-9b-it",
 ]
