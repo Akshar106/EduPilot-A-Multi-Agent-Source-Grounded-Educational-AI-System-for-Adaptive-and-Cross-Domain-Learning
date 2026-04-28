@@ -51,8 +51,8 @@ EduPilot's approach:
 | **Cross-domain synthesis** | Automatically detects multi-domain queries and retrieves from each domain separately |
 | **Out-of-domain guard** | Hard refusal for questions outside AML, ADT, STAT, LLM scope |
 | **Self Study Mode** | Upload any personal documents (PDF, TXT, DOCX) and chat with them privately |
-| **Evaluation dashboard** | Built-in UI to run the 50-query test suite and see per-case metrics |
-| **Model selector** | Switch between Groq (Llama 3.3 70B, Gemma 2) and Gemini fallback at runtime |
+| **Evaluation dashboard** | Built-in UI to run the 10-query test suite and see per-case metrics |
+| **Model selector** | Switch between Groq (Llama 3.3 70B, Llama 3.1 8B) and Gemini fallback at runtime |
 | **Debug panel** | Real-time view of retrieved chunks, reranking scores, and verification reasoning |
 
 ---
@@ -109,7 +109,7 @@ Student Query
 ┌─────────────────────────────────┐
 │  Stage 7 — VERIFIER             │  Scores quality (≥ 0.75) + coverage (≥ 0.70)
 │  Two-pass self-grading          │  Targeted rewrite if below threshold
-│  Grounding improvement: +36%    │
+│  4.6× token efficiency gain     │
 └──────────────┬──────────────────┘
                │
                ▼
@@ -196,7 +196,7 @@ An active "ML Interview" study session with two uploaded PDFs (38 chunks). EduPi
 
 ### Evaluation Dashboard
 
-The built-in Evaluation tab shows live results across all test cases — 100% pass rate, 100% intent accuracy, 100% domain accuracy, and 91% average answer quality on the initial smoke test. The full 50-query suite can be run from this tab or via `python3 run_eval.py`.
+The built-in Evaluation tab shows live results across all 10 test cases — 100% intent accuracy, 100% domain accuracy, retrieval hit rate 0.49, mean quality 0.84, and citation accuracy 1.00 with the primary model (Llama-3.3-70B). The suite can be run from this tab or via `python3 run_eval.py`.
 
 ![Evaluation Dashboard](screenshots/09_evaluation_dashboard.png)
 
@@ -206,7 +206,7 @@ The built-in Evaluation tab shows live results across all test cases — 100% pa
 
 | Layer | Technology |
 |---|---|
-| **LLM** | Groq (Llama 3.3 70B Versatile, Gemma 2 9B) · Gemini 2.0 Flash (fallback) |
+| **LLM** | Groq (Llama 3.3 70B Versatile, Llama 3.1 8B Instant) · Gemini 2.0 Flash (fallback) |
 | **Embeddings** | `all-MiniLM-L6-v2` (384-dim, sentence-transformers) |
 | **Vector Store** | Pinecone Serverless (AWS us-east-1) |
 | **Keyword Search** | `rank-bm25` (in-memory BM25 index, rebuilt from SQLite on startup) |
@@ -235,7 +235,8 @@ EduPilot/
 ├── prompts.py               # All seven LLM prompt templates
 ├── utils.py                 # LLM caller, document chunking, shared types
 ├── database.py              # SQLite session + message storage
-├── evaluation.py            # 50-query evaluation suite + 8 metrics
+├── evaluation.py            # 10-query evaluation suite + 8 metrics
+├── model_comparison_eval.py # 3-model comparison runner (saves one CSV per model)
 ├── run_eval.py              # Standalone evaluation runner script
 ├── self_study_retriever.py  # Private document retrieval for Self Study Mode
 │
@@ -340,15 +341,25 @@ UI opens at `http://localhost:8501`.
 
 ## Evaluation Suite
 
-EduPilot ships with a **50-query evaluation suite** covering all pipeline layers across four categories:
+EduPilot ships with a **10-query evaluation suite** covering all pipeline layers across three categories:
 
 | Category | Queries | Description |
 |---|---|---|
-| Single-domain | 25 | One domain per query (AML, ADT, STAT, LLM) |
-| Multi-domain | 10 | Cross-domain queries requiring synthesis |
-| Edge cases | 8 | Ambiguous, empty, out-of-domain, mixed-language inputs |
-| Adversarial | 7 | Hallucination traps, false premises, prompt injection |
-| **Total** | **50** | |
+| Single-domain | 6 | Factual and conceptual queries spanning AML, ADT, STAT, and LLM domains |
+| Multi-domain | 2 | Cross-domain queries requiring two-namespace synthesis |
+| Adversarial | 2 | Fabricated concepts and false-premise queries stressing hallucination resistance |
+| **Total** | **10** | |
+
+### Aggregate results (Llama-3.3-70B primary model)
+
+| Category | N | Intent | Hit Rate | Quality |
+|---|---|---|---|---|
+| Single-domain | 6 | 1.00 | 0.53 | 0.91 |
+| Multi-domain | 2 | 1.00 | 0.50 | 0.70 |
+| Adversarial | 2 | 1.00 | 0.20 | 0.70 |
+| **Overall** | **10** | **1.00** | **0.49** | **0.84** |
+
+Citation accuracy: **1.00** across all generating queries. No verifier revisions triggered.
 
 ### Eight metrics measured per query
 
@@ -359,30 +370,35 @@ EduPilot ships with a **50-query evaluation suite** covering all pipeline layers
 | Retrieval Hit Rate | Fraction of expected keywords found in retrieved chunks |
 | Faithfulness | LLM-judged grounding of answer in retrieved evidence |
 | Citation Accuracy | `[Source N]` markers match their referenced chunks |
-| Answer Relevance | Cosine similarity between query and answer embeddings |
+| Quality Score | Verifier rubric score (0.95–1.00 Exceptional, 0.70–0.84 Adequate) |
 | Coverage Score | Sub-topics addressed relative to expected behavior |
 | Latency (ms) | End-to-end wall-clock time |
+
+### Model comparison (10 queries, 3 providers)
+
+| Metric | Llama-3.3-70B | Llama-3.1-8B | Gemini-2.5-Flash |
+|---|---|---|---|
+| Quality score | **0.842** | 0.830 | 0.847 |
+| Citation accuracy | **1.000** | 0.270 | **1.000** |
+| Faithfulness | 0.662 | **0.725** | 0.450 |
+| Avg latency (ms) | **13,785** | 15,073 | 15,117 |
+
+Key finding: a **3.7× citation-accuracy gap** between Llama-70B and Llama-8B on identical inputs — purely from model choice.
 
 ### Running the evaluation
 
 ```bash
-# All 50 test cases
+# Run all 10 test cases
 python3 run_eval.py
 
-# Filter by category
-python3 run_eval.py --category single-domain
-python3 run_eval.py --category multi-domain
-python3 run_eval.py --category edge-case
-python3 run_eval.py --category adversarial
-
-# Quick smoke test (first N cases)
-python3 run_eval.py --limit 10
+# Run the 3-model comparison (saves one CSV per model)
+python3 model_comparison_eval.py
 
 # Save results to a timestamped file
 python3 run_eval.py --out results_$(date +%Y%m%d).json
 ```
 
-Results are printed to stdout and saved as JSON. The **Evaluation tab** in the Streamlit UI provides the same functionality with a live visual dashboard (see screenshot above).
+Results are printed to stdout and saved as JSON/CSV. The **Evaluation tab** in the Streamlit UI provides the same functionality with a live visual dashboard (see screenshot above).
 
 ---
 
@@ -457,7 +473,7 @@ Run a single named test case from the evaluation suite.
 
 ### `POST /evaluate/all`
 
-Run all 50 test cases and return aggregate statistics.
+Run all 10 test cases and return aggregate statistics.
 
 ### `POST /knowledge-base/upload`
 
@@ -474,7 +490,7 @@ Upload a document to a private Self Study session.
 | Name | Email | Contributions |
 |---|---|---|
 | **Akshar Patel** | akspate@iu.edu | System architecture, hybrid retrieval pipeline (Pinecone + BM25 + RRF), query router with keyword fallback, query splitter, SQLite database layer, FastAPI async backend, confidence-thresholded reranker, evaluation suite construction, report writing |
-| **Khushi Shah** | khusshah@iu.edu | Domain agent prompt engineering, cross-domain synthesizer, two-pass verifier with targeted revision, Self Study module, Streamlit debug UI, all seven prompt templates, evaluation framework (50 queries, 8 metrics, four categories), inter-model reliability analysis, primary report writing |
+| **Khushi Shah** | khusshah@iu.edu | Domain agent prompt engineering, cross-domain synthesizer, two-pass verifier with targeted revision, Self Study module, Streamlit debug UI, all seven prompt templates, evaluation framework (10 queries, 8 metrics, three categories), 3-model comparison analysis, primary report writing |
 
 Indiana University Bloomington · Luddy School of Informatics, Computing, and Engineering
 
