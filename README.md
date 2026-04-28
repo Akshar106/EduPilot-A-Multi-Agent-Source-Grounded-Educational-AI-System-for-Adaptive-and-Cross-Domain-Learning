@@ -236,7 +236,7 @@ EduPilot/
 ├── utils.py                 # LLM caller, document chunking, shared types
 ├── database.py              # SQLite session + message storage
 ├── evaluation.py            # 10-query evaluation suite + 8 metrics
-├── model_comparison_eval.py # 3-model comparison runner (saves one CSV per model)
+├── model_comparison.py # 3-model comparison runner (saves one CSV per model)
 ├── run_eval.py              # Standalone evaluation runner script
 ├── self_study_retriever.py  # Private document retrieval for Self Study Mode
 │
