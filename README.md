@@ -45,13 +45,15 @@ EduPilot's approach:
 | Feature | Description |
 |---|---|
 | **Multi-agent pipeline** | 7 independent agents: Router → Splitter → Retriever → Reranker → Generator → Synthesizer → Verifier |
-| **Hybrid retrieval** | Reciprocal Rank Fusion (60% semantic + 40% BM25) outperforms unimodal retrieval by 8–14% |
+| **Hybrid retrieval** | Reciprocal Rank Fusion over dense + sparse (and optionally HyDE / multi-query) probes, served natively by Pinecone |
 | **Source citations** | Every answer includes `[Source N]` markers with lecture name and page number |
 | **Two-pass verification** | Self-grading on quality and coverage; targeted rewrite if thresholds not met |
 | **Cross-domain synthesis** | Automatically detects multi-domain queries and retrieves from each domain separately |
 | **Out-of-domain guard** | Hard refusal for questions outside AML, ADT, STAT, LLM scope |
 | **Self Study Mode** | Upload any personal documents (PDF, TXT, DOCX) and chat with them privately |
-| **Evaluation dashboard** | Built-in UI to run the 10-query test suite and see per-case metrics |
+| **Evaluation suite** | 50 test cases and 8 objective metrics, run via the `edupilot-evaluate` CLI |
+| **Blue/green indexing** | Rebuilds write to a new index version and promote only on success — a failed rebuild changes nothing |
+| **Auth + guardrails** | JWT auth with per-user ownership, rate limiting, upload validation, and prompt-injection scanning |
 | **Model selector** | Switch between Groq (Llama 3.3 70B, Llama 3.1 8B) and Gemini fallback at runtime |
 | **Debug panel** | Real-time view of retrieved chunks, reranking scores, and verification reasoning |
 
@@ -81,15 +83,15 @@ Student Query
      │                    │ (one branch per domain)
      ▼                    ▼
 ┌─────────────────────────────────┐
-│  Stage 3 — HYBRID RETRIEVER     │  Pinecone (semantic) + BM25 (keyword)
-│  RRF(c) = Σ w_r / (k + rank_r) │  k=60, w_sem=0.60, w_bm25=0.40
-│  all-MiniLM-L6-v2  (384-dim)   │  Top-K = 8 candidates
+│  Stage 3 — HYBRID RETRIEVER     │  Pinecone dense + sparse, one query
+│  RRF(c) = Σ w_r / (k + rank_r) │  k=60, weighted per probe
+│  bge-small-en-v1.5  (384-dim)  │  Top-K = 8 candidates
 └──────────────┬──────────────────┘
                │
                ▼
 ┌─────────────────────────────────┐
-│  Stage 4 — RERANKER             │  Confidence-thresholded cross-encoder
-│  Filters to Top-K = 5 chunks    │  Threshold = 0.20
+│  Stage 4 — RERANKER             │  bge-reranker-base cross-encoder
+│  Filters to Top-K = 5 chunks    │  Calibrated per-model relevance floor
 └──────────────┬──────────────────┘
                │
                ▼
@@ -134,7 +136,7 @@ Student Query
 
 The full EduPilot UI — conversation history in the left sidebar, model and retrieval settings below it, suggested questions at the top, and the main answer pane. Domain tags (AML, ADT, STAT, LLM) badge every response.
 
-![Main Chat Interface](screenshots/01_main_chat_interface.png)
+![Main Chat Interface](docs/screenshots/01_main_chat_interface.png)
 
 ---
 
@@ -142,7 +144,7 @@ The full EduPilot UI — conversation history in the left sidebar, model and ret
 
 EduPilot answers a cross-domain question about Backpropagation and LLM Training with a 96% quality score. The response is structured into Overview, Core Concepts, Algorithm definition, and Mechanism sections — all grounded in retrieved course material.
 
-![High Quality Answer](screenshots/02_high_quality_answer.png)
+![High Quality Answer](docs/screenshots/02_high_quality_answer.png)
 
 ---
 
@@ -150,7 +152,7 @@ EduPilot answers a cross-domain question about Backpropagation and LLM Training 
 
 A query spanning three domains ("Hypothesis Testing, Supervised ML, and RAG optimisation techniques") is automatically decomposed. Each part is retrieved independently, then synthesized into one unified answer. Domain badges show which knowledge base each section came from.
 
-![Multi Domain Answer](screenshots/03_multi_domain_answer.png)
+![Multi Domain Answer](docs/screenshots/03_multi_domain_answer.png)
 
 ---
 
@@ -158,7 +160,7 @@ A query spanning three domains ("Hypothesis Testing, Supervised ML, and RAG opti
 
 Every answer includes an expandable citations panel showing exactly which lecture slide and page each source came from. Sources span multiple domains (STAT, LLM, AML) in a single response and are downloadable as PDFs.
 
-![Source Citations](screenshots/04_source_citations.png)
+![Source Citations](docs/screenshots/04_source_citations.png)
 
 ---
 
@@ -166,7 +168,7 @@ Every answer includes an expandable citations panel showing exactly which lectur
 
 When a question falls outside the four supported courses (e.g., "What are the important components in finance?"), EduPilot refuses to answer rather than hallucinate, and clearly lists the four supported domains.
 
-![Out of Domain Rejection](screenshots/05_out_of_domain_rejection.png)
+![Out of Domain Rejection](docs/screenshots/05_out_of_domain_rejection.png)
 
 ---
 
@@ -174,7 +176,7 @@ When a question falls outside the four supported courses (e.g., "What are the im
 
 Instructors or students can extend any domain knowledge base by attaching PDF, TXT, or DOCX files through the drag-and-drop upload modal. Files are indexed into Pinecone and BM25 automatically.
 
-![Document Upload](screenshots/06_document_upload.png)
+![Document Upload](docs/screenshots/06_document_upload.png)
 
 ---
 
@@ -182,7 +184,7 @@ Instructors or students can extend any domain knowledge base by attaching PDF, T
 
 Self Study Mode lets students upload any personal documents — notes, textbooks, past papers — and chat with them privately. This is completely separate from the course knowledge base and does not affect other users.
 
-![Self Study Mode](screenshots/07_self_study_mode.png)
+![Self Study Mode](docs/screenshots/07_self_study_mode.png)
 
 ---
 
@@ -190,15 +192,17 @@ Self Study Mode lets students upload any personal documents — notes, textbooks
 
 An active "ML Interview" study session with two uploaded PDFs (38 chunks). EduPilot answers a question about Multi-Head Attention with inline `[Source N]` citations drawn exclusively from the uploaded documents.
 
-![Self Study Session](screenshots/08_self_study_session.png)
+![Self Study Session](docs/screenshots/08_self_study_session.png)
 
 ---
 
 ### Evaluation Dashboard
 
-The built-in Evaluation tab shows live results across all 10 test cases — 100% intent accuracy, 100% domain accuracy, retrieval hit rate 0.49, mean quality 0.84, and citation accuracy 1.00 with the primary model (Llama-3.3-70B). The suite can be run from this tab or via `python3 run_eval.py`.
+The evaluation dashboard from the original Streamlit UI, showing results across the 10-case suite — 100% intent accuracy, 100% domain accuracy, retrieval hit rate 0.49, mean quality 0.84, and citation accuracy 1.00 with the primary model (Llama-3.3-70B).
 
-![Evaluation Dashboard](screenshots/09_evaluation_dashboard.png)
+*This screenshot is historical.* The Streamlit UI has been retired in favour of the bundled single-page frontend, and the suite now runs from the command line with `edupilot-evaluate`, which prints the same scorecard.
+
+![Evaluation Dashboard](docs/screenshots/09_evaluation_dashboard.png)
 
 ---
 
@@ -206,50 +210,85 @@ The built-in Evaluation tab shows live results across all 10 test cases — 100%
 
 | Layer | Technology |
 |---|---|
-| **LLM** | Groq (Llama 3.3 70B Versatile, Llama 3.1 8B Instant) · Gemini 2.0 Flash (fallback) |
-| **Embeddings** | `all-MiniLM-L6-v2` (384-dim, sentence-transformers) |
-| **Vector Store** | Pinecone Serverless (AWS us-east-1) |
-| **Keyword Search** | `rank-bm25` (in-memory BM25 index, rebuilt from SQLite on startup) |
-| **Reranking** | Confidence-thresholded score filtering (threshold = 0.20) |
-| **Backend** | FastAPI + Uvicorn (async) |
-| **Frontend** | Streamlit (`app.py`) |
-| **Database** | SQLite (conversation history, BM25 chunk cache) |
-| **Document Parsing** | PyMuPDF (PDF) · python-docx (DOCX) · plain text |
-| **Environment** | Python 3.10+ · `python-dotenv` |
+| **LLM** | Groq (Llama 3.3 70B Versatile, Llama 3.1 8B Instant, Gemma 2 9B) · Gemini 2.0/2.5 Flash (fallback) |
+| **Embeddings** | `BAAI/bge-small-en-v1.5` (384-dim, 512-token window, asymmetric query prefix) |
+| **Vector Store** | Pinecone Serverless, `dotproduct` metric, versioned blue/green indexes |
+| **Keyword Search** | BM25 term weights computed at ingest, stored as Pinecone **sparse vectors** (no in-memory index) |
+| **Fusion** | Reciprocal Rank Fusion across dense / sparse / HyDE / multi-query probes |
+| **Reranking** | `BAAI/bge-reranker-base` cross-encoder, with a per-model calibrated relevance floor |
+| **Backend** | FastAPI + Uvicorn (async, worker pool for blocking calls) |
+| **Frontend** | Vanilla JS single-page app, served from `edupilot/web/static` |
+| **Database** | SQLite (WAL, versioned schema with migrations) |
+| **Document Parsing** | PyMuPDF + pdfplumber (PDF, tables) · python-docx (DOCX) · Tesseract (OCR fallback) |
+| **Auth** | JWT access tokens + rotating refresh tokens, bcrypt password hashing |
+| **Environment** | Python 3.11+ · `python-dotenv` |
 
 ---
 
 ## Project Structure
 
+A `src/` layout: importable code lives in `src/edupilot`, everything the
+application reads or writes at runtime lives in `data/`. Only `data/` needs to
+be writable, and it is the only path worth mounting in a container.
+
 ```
 EduPilot/
-├── main.py                  # FastAPI app + _run_pipeline orchestrator
-├── app.py                   # Streamlit frontend
-├── config.py                # Central config (models, domains, thresholds)
-├── router.py                # Stage 1: intent classification + domain routing
-├── query_splitter.py        # Stage 2: multi-domain query decomposition
-├── retriever.py             # Stage 3: Pinecone + BM25 hybrid retrieval
-├── reranker.py              # Stage 4: confidence-thresholded reranking
-├── synthesizer.py           # Stage 6: multi-domain answer synthesis
-├── verifier.py              # Stage 7: two-pass quality verification
-├── prompts.py               # All seven LLM prompt templates
-├── utils.py                 # LLM caller, document chunking, shared types
-├── database.py              # SQLite session + message storage
-├── evaluation.py            # 10-query evaluation suite + 8 metrics
-├── model_comparison.py      # 3-model comparison runner (saves one CSV per model)
-├── run_eval.py              # Standalone evaluation runner script
-├── self_study_retriever.py  # Private document retrieval for Self Study Mode
+├── pyproject.toml               # packaging, dependencies, ruff + pytest config
+├── requirements.txt             # thin wrapper: installs the project itself
+├── .env.example                 # documented environment template
 │
-├── knowledge_base/
-│   ├── aml/                 # Applied Machine Learning lecture slides
-│   ├── adt/                 # Applied Database Technologies materials
-│   ├── stats/               # Statistics lecture notes
-│   ├── llm/                 # Large Language Models course materials
-│   └── devops/              # DevOps supplementary materials
+├── src/edupilot/
+│   ├── api/                     # HTTP layer — routing and nothing else
+│   │   ├── app.py               #   application factory, middleware, error handlers
+│   │   ├── deps.py              #   auth annotations, worker pool, validators
+│   │   ├── schemas.py           #   pydantic request bodies
+│   │   └── routes/              #   one module per resource
+│   │       ├── auth.py          #     register / login / refresh / logout / me
+│   │       ├── chat.py          #     the multi-agent course-chat endpoint
+│   │       ├── sessions.py      #     conversation history
+│   │       ├── knowledge_base.py#     shared corpus (admin-gated writes)
+│   │       ├── self_study.py    #     private per-student documents + chat
+│   │       ├── evaluation.py    #     test-case listing
+│   │       └── system.py        #     SPA entry, health, client config
+│   │
+│   ├── agents/                  # router → splitter → answerer → synthesizer → verifier
+│   │   ├── pipeline.py          #   orchestration
+│   │   ├── contracts.py         #   typed inter-agent payloads
+│   │   └── prompts.py           #   every LLM prompt template
+│   │
+│   ├── retrieval/               # embeddings, vector store, hybrid search, reranking
+│   │   ├── embeddings.py        #   embedder + on-disk embedding cache
+│   │   ├── vectorstore.py       #   Pinecone and in-memory backends
+│   │   ├── sparse.py            #   BM25 term weights for sparse vectors
+│   │   ├── hybrid.py            #   RRF fusion across probes
+│   │   ├── query_transform.py   #   acronym expansion, multi-query, HyDE
+│   │   ├── rerank.py            #   cross-encoder + calibrated floors
+│   │   └── indexer.py           #   ingest orchestration, blue/green rebuilds
+│   │
+│   ├── ingestion/               # document → blocks → sections → chunks
+│   │   ├── pdf.py               #   PyMuPDF + pdfplumber + OCR fallback
+│   │   ├── office.py            #   DOCX and Markdown
+│   │   ├── normalize.py         #   header/footer stripping, unicode cleanup
+│   │   ├── chunking.py          #   token-aware, section-respecting chunker
+│   │   └── models.py            #   Block / Section / ParsedDocument
+│   │
+│   ├── guardrails/              # citation, grounding, injection, output checks
+│   ├── security/                # auth, rate limiting, uploads, error envelopes
+│   ├── evaluation/              # cases.py (50 cases) · metrics.py · runner.py
+│   ├── llm/                     # provider-agnostic client with fallback chain
+│   ├── db/                      # SQLite: connection · schema · chat · documents · self_study
+│   ├── core/                    # config · services (composition root) · observability
+│   ├── cli/                     # edupilot-reindex, edupilot-evaluate
+│   └── web/static/              # single-page frontend (ships with the package)
 │
-├── screenshots/             # UI screenshots (used in this README)
-├── requirements.txt
-└── .env                     # API keys (not committed)
+├── tests/                       # pytest suite (pinned to a throwaway DATA_DIR)
+├── docs/screenshots/            # UI screenshots used in this README
+│
+└── data/                        # gitignored — all runtime state
+    ├── knowledge_base/          #   aml/ adt/ stats/ llm/
+    ├── self_study_files/        #   per-session student uploads
+    ├── state/                   #   embedding cache, BM25 table, index pointer
+    └── edupilot.db              #   sessions, messages, chunks, users
 ```
 
 ---
@@ -258,10 +297,12 @@ EduPilot/
 
 ### Prerequisites
 
-- Python 3.10 or higher
+- Python 3.11 or higher
 - A [Groq](https://console.groq.com) API key (free tier available)
-- A [Pinecone](https://app.pinecone.io) API key with a serverless index named `edupilot`
+- A [Pinecone](https://app.pinecone.io) API key — the index is created automatically on first rebuild
 - (Optional) A [Google Gemini](https://aistudio.google.com) API key for fallback
+- (Optional) Tesseract OCR, for scanned PDF pages without a text layer:
+  `brew install tesseract` / `apt-get install tesseract-ocr`
 
 ### 1. Clone the repository
 
@@ -273,84 +314,88 @@ cd EduPilot-A-Multi-Agent-Source-Grounded-Educational-AI-System-for-Adaptive-and
 ### 2. Create a virtual environment
 
 ```bash
-python3 -m venv venv
-source venv/bin/activate        # macOS / Linux
-# venv\Scripts\activate         # Windows
+python3 -m venv .venv
+source .venv/bin/activate       # macOS / Linux
+# .venv\Scripts\activate        # Windows
 ```
 
-### 3. Install dependencies
+### 3. Install the project
+
+Installs `edupilot` in editable mode along with every dependency:
 
 ```bash
-pip install -r requirements.txt
+pip install -e ".[dev]"
 ```
+
+Drop the `[dev]` extra for a runtime-only install, or use `pip install -r requirements.txt`, which does the same thing.
 
 ### 4. Configure environment variables
 
-Create a `.env` file in the project root:
+Copy the documented template and fill it in — every variable is explained inline:
 
-```env
-# Required
-GROQ_API_KEY=your_groq_api_key_here
-PINECONE_API_KEY=your_pinecone_api_key_here
-PINECONE_INDEX_NAME=edupilot
-PINECONE_CLOUD=aws
-PINECONE_REGION=us-east-1
-
-# Optional — Gemini fallback when Groq quota is exhausted
-GEMINI_API_KEY=your_gemini_api_key_here
-
-# Database
-SQLITE_DB_PATH=edupilot.db
+```bash
+cp .env.example .env
 ```
+
+At minimum set `GROQ_API_KEY`, `PINECONE_API_KEY`, and `JWT_SECRET_KEY`. Generate the signing key with:
+
+```bash
+python3 -c "import secrets; print(secrets.token_urlsafe(48))"
+```
+
+Set `BOOTSTRAP_ADMIN_EMAIL` and `BOOTSTRAP_ADMIN_PASSWORD` too — the first admin is created on startup when no users exist, and without one the knowledge-base routes are unreachable.
 
 ### 5. Add course materials to the knowledge base
 
-Place PDF, TXT, or DOCX files into the appropriate subdirectory:
+Place PDF, TXT, MD, or DOCX files into the appropriate subdirectory:
 
 ```
-knowledge_base/aml/      ← AML lecture slides
-knowledge_base/adt/      ← ADT materials
-knowledge_base/stats/    ← Statistics notes
-knowledge_base/llm/      ← LLM course materials
+data/knowledge_base/aml/      ← AML lecture slides
+data/knowledge_base/adt/      ← ADT materials
+data/knowledge_base/stats/    ← Statistics notes
+data/knowledge_base/llm/      ← LLM course materials
 ```
 
-Documents are indexed into Pinecone and the BM25 cache automatically on first startup.
+### 6. Build the index
+
+```bash
+edupilot-reindex --rebuild
+```
+
+This extracts, chunks, embeds, and upserts every document into a **new** index version, promoting it only after all four domains succeed. The live index keeps serving throughout, so a failed rebuild changes nothing. Check the result with `edupilot-reindex --status`.
+
+Admins can also add documents at runtime via `POST /api/kb/upload`, which indexes incrementally.
 
 ---
 
 ## Running the Application
 
-### FastAPI Backend
-
 ```bash
-uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+uvicorn edupilot.api.app:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-API available at `http://localhost:8000`.  
-Interactive docs: `http://localhost:8000/docs`
+- App: `http://localhost:8000`
+- Interactive docs: `http://localhost:8000/docs` (disabled when `EDUPILOT_ENV=production`)
 
-### Streamlit Frontend
-
-```bash
-streamlit run app.py
-```
-
-UI opens at `http://localhost:8501`.
+The frontend is a single-page app served by the same process — there is no separate UI server to start.
 
 ---
 
 ## Evaluation Suite
 
-EduPilot ships with a **10-query evaluation suite** covering all pipeline layers across three categories:
+EduPilot ships with a **50-case evaluation suite** covering all pipeline layers across four categories:
 
-| Category | Queries | Description |
+| Category | Cases | Description |
 |---|---|---|
-| Single-domain | 6 | Factual and conceptual queries spanning AML, ADT, STAT, and LLM domains |
-| Multi-domain | 2 | Cross-domain queries requiring two-namespace synthesis |
-| Adversarial | 2 | Fabricated concepts and false-premise queries stressing hallucination resistance |
-| **Total** | **10** | |
+| Single-domain | 25 | Factual and conceptual queries spanning AML, ADT, STAT, and LLM domains |
+| Multi-domain | 10 | Cross-domain queries requiring multi-namespace synthesis |
+| Edge-case | 8 | Out-of-domain, ambiguous, and empty-retrieval cases that should refuse |
+| Adversarial | 7 | Fabricated concepts and false-premise queries stressing hallucination resistance |
+| **Total** | **50** | |
 
-### Aggregate results (Llama-3.3-70B primary model)
+### Reported results — 10-case suite, Llama-3.3-70B
+
+> These figures come from the original 10-case suite used in the project report. The suite has since grown to 50 cases, so they are kept for reference rather than as current numbers. Re-run `edupilot-evaluate` to measure the present system.
 
 | Category | N | Intent | Hit Rate | Quality |
 |---|---|---|---|---|
@@ -388,56 +433,93 @@ Key finding: a **3.7× citation-accuracy gap** between Llama-70B and Llama-8B on
 ### Running the evaluation
 
 ```bash
-# Run all 10 test cases
-python3 run_eval.py
-
-# Run the 3-model comparison (saves one CSV per model)
-python3 model_comparison.py
-
-# Save results to a timestamped file
-python3 run_eval.py --out results_$(date +%Y%m%d).json
+edupilot-evaluate
 ```
 
-Results are printed to stdout and saved as JSON/CSV. The **Evaluation tab** in the Streamlit UI provides the same functionality with a live visual dashboard (see screenshot above).
+Useful flags:
+
+```bash
+edupilot-evaluate --category edge-case              # one category
+edupilot-evaluate --case TC-01 --case TC-04         # specific cases
+edupilot-evaluate --model llama-3.1-8b-instant      # compare a model
+edupilot-evaluate --json results.json               # machine-readable output
+```
+
+A scorecard prints to stdout; `--json` additionally writes per-case results. The command exits non-zero when any case fails, so it works as a CI gate. Reproduce the model comparison above by running it once per model with `--model` and `--json`.
+
+A full pass is hundreds of LLM calls, which is why it is a CLI rather than an API route — `GET /api/evaluate/cases` only *lists* the suite.
 
 ---
 
 ## Configuration
 
-All tunable parameters live in `config.py`:
+Tunable parameters live in `src/edupilot/core/config.py`. Anything read from the environment is documented in `.env.example`.
 
 ```python
 # Retrieval
-DEFAULT_TOP_K = 8                   # Candidates from Pinecone + BM25
-DEFAULT_RERANK_TOP_K = 5            # Chunks passed to LLM after reranking
-DEFAULT_CONFIDENCE_THRESHOLD = 0.20
+DEFAULT_TOP_K = 8                   # candidates retrieved before reranking
+DEFAULT_RERANK_TOP_K = 5            # chunks passed to the LLM after reranking
 
-# Hybrid RRF weights
-SEMANTIC_WEIGHT = 0.60
-BM25_WEIGHT = 0.40
-RRF_K = 60                          # RRF(c) = Σ w / (k + rank)
+# Chunking — measured in embedding-model TOKENS, not words
+CHUNK_MAX_TOKENS = 448              # hard ceiling, under the 512-token window
+CHUNK_TARGET_TOKENS = 320           # preferred size
+CHUNK_MIN_TOKENS = 64               # below this, merge into a neighbour
+PARENT_MAX_TOKENS = 1400            # wider window for small-to-big retrieval
 
-# Verification thresholds
-QUALITY_THRESHOLD = 0.75            # Min quality score before rewrite
-COVERAGE_THRESHOLD = 0.70           # Min coverage score before rewrite
-
-# Chunking
-CHUNK_SIZE = 800
-CHUNK_OVERLAP = 150
+# Query transformation — each LLM-backed step costs a round-trip, so both
+# default off. Acronym expansion is deterministic and always on.
+ENABLE_MULTI_QUERY = False
+ENABLE_HYDE = False
+ENABLE_PARENT_EXPANSION = True
 
 # Models
-DEFAULT_MODEL = "llama-3.3-70b-versatile"   # Groq
-VERIFY_MODEL  = "llama-3.3-70b-versatile"
-EMBEDDING_MODEL = "all-MiniLM-L6-v2"
+DEFAULT_MODEL   = "llama-3.3-70b-versatile"   # Groq
+VERIFY_MODEL    = "llama-3.3-70b-versatile"
+EMBEDDING_MODEL = "BAAI/bge-small-en-v1.5"
+RERANKER_MODEL  = "BAAI/bge-reranker-base"
 ```
+
+Two knobs deliberately live next to the code that applies them rather than here:
+
+- **RRF weights** — `PROBE_WEIGHTS` and `RRF_K` in `retrieval/hybrid.py`. Fusion weights each *probe* (dense, sparse, HyDE, multi-query), not two fixed modalities, so a pair of scalars could not express it.
+- **Minimum relevance** — calibrated per reranker in `retrieval/rerank.py`, because the score scale is model-specific. Set `DEFAULT_MIN_RELEVANCE` to override.
+
+### Adding a course domain
+
+Add one entry to `DOMAINS` in `config.py`, drop files into `data/knowledge_base/<dir>/`, and run `edupilot-reindex --rebuild`. No other code changes are needed — routing, retrieval, and the frontend all read the registry.
 
 ---
 
 ## API Reference
 
-### `POST /chat`
+Every route is rate limited and returns a typed error envelope. All routes except `GET /`, `GET /api/health`, `GET /api/config`, and the auth entry points require a bearer token; knowledge-base writes require the `admin` role.
 
-Send a query through the full pipeline.
+| Method | Path | Auth | Purpose |
+|---|---|---|---|
+| `POST` | `/api/auth/register` | — | Create an account |
+| `POST` | `/api/auth/login` | — | Exchange credentials for tokens |
+| `POST` | `/api/auth/refresh` | — | Rotate a refresh token |
+| `POST` | `/api/auth/logout` | user | Revoke all refresh tokens |
+| `GET` | `/api/auth/me` | user | Current identity |
+| `GET` | `/api/health` | — | Dependency readiness |
+| `GET` | `/api/config` | — | Models, domains, defaults for the frontend |
+| `POST` | `/api/chat` | user | Full multi-agent pipeline |
+| `GET`/`POST` | `/api/sessions` | user | List / create conversations |
+| `GET`/`DELETE` | `/api/sessions/{id}` | owner | Read / delete one conversation |
+| `DELETE` | `/api/sessions/{id}/messages/{mid}` | owner | Truncate from a message (edit-and-resend) |
+| `GET` | `/api/kb/status` | user | Per-domain chunk counts and documents |
+| `GET` | `/api/kb/documents` | user | Indexed documents by domain |
+| `POST` | `/api/kb/upload` | **admin** | Add documents to the shared corpus |
+| `DELETE` | `/api/kb/{domain}/{filename}` | **admin** | Remove a document and its vectors |
+| `GET` | `/api/documents/{domain}/{filename}` | user | Serve a source PDF behind a citation |
+| `GET`/`POST` | `/api/self-study/sessions` | user | List / create private study sessions |
+| `GET`/`DELETE` | `/api/self-study/sessions/{id}` | owner | Read / delete a study session |
+| `POST` | `/api/self-study/sessions/{id}/upload` | owner | Upload private documents |
+| `DELETE` | `/api/self-study/sessions/{id}/documents/{doc_id}` | owner | Remove one private document |
+| `POST` | `/api/self-study/chat` | owner | Chat over your own documents |
+| `GET` | `/api/evaluate/cases` | user | List the 50 test cases |
+
+### `POST /api/chat`
 
 **Request:**
 ```json
@@ -447,41 +529,32 @@ Send a query through the full pipeline.
   "model": "llama-3.3-70b-versatile",
   "top_k": 8,
   "rerank_top_k": 5,
-  "confidence_threshold": 0.20,
   "enable_verification": true
 }
 ```
 
+`session_id` is optional — omit it and a new session is created, owned by the caller. Ownership always comes from the bearer token, never from the body.
+
 **Response:**
 ```json
 {
+  "session_id": "abc123",
   "final_answer": "The bias-variance tradeoff describes...",
   "intent_type": "single",
   "detected_domains": ["AML"],
-  "quality_score": 0.92,
+  "is_course_related": true,
+  "needs_clarification": false,
+  "refused": false,
+  "grounding_score": 0.92,
+  "guardrail_action": "pass",
   "sources": [
     { "source_num": 1, "citation_label": "AML · Lec3 p.12", "text": "..." }
   ],
-  "needs_clarification": false,
-  "is_course_related": true
+  "debug": { "retrieval": {}, "guardrails": {}, "usage": {} }
 }
 ```
 
-### `POST /evaluate`
-
-Run a single named test case from the evaluation suite.
-
-### `POST /evaluate/all`
-
-Run all 10 test cases and return aggregate statistics.
-
-### `POST /knowledge-base/upload`
-
-Upload a document (PDF / TXT / DOCX) to a domain knowledge base.
-
-### `POST /self-study/upload`
-
-Upload a document to a private Self Study session.
+`grounding_score` is `null` when grounding was not measured — it is never defaulted or floored, so a missing score is distinguishable from a low one.
 
 ---
 

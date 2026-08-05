@@ -1,14 +1,32 @@
+# ── Secrets ──────────────────────────────────────────────────────────────────
 .env
 .env.*
 !.env.example
-knowledge_base/
-vector_stores/
-.claude/
-.DS_Store
+
+# ── Runtime data ─────────────────────────────────────────────────────────────
+# Everything the app reads or writes at runtime: the course corpus, student
+# uploads, the SQLite database, and local caches. Nothing here is source, and
+# nothing here belongs in the repo.
+data/
+
 *.db
 *.db-shm
 *.db-wal
+
+# ── Python ───────────────────────────────────────────────────────────────────
 __pycache__/
-venv
-# Local caches and index metadata
-.edupilot/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# ── Editors and OS ───────────────────────────────────────────────────────────
+.claude/
+.DS_Store
+.idea/
+.vscode/

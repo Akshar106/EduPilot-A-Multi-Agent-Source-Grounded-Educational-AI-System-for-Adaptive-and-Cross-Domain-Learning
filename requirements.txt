@@ -1,50 +1,25 @@
-# EduPilot — Python Dependencies
-# Install with: pip install -r requirements.txt
+# EduPilot — Python dependencies
+#
+# pyproject.toml is the source of truth for the dependency list. This file
+# exists so `pip install -r requirements.txt` still works: it installs the
+# project itself, which pulls in everything under [project.dependencies].
+#
+#   pip install -r requirements.txt     runtime only
+#   pip install -e ".[dev]"             runtime + pytest/ruff
 #
 # Optional system dependency: Tesseract OCR, for scanned PDF pages.
 #   macOS    brew install tesseract
 #   Ubuntu   apt-get install tesseract-ocr
 # Without it ingestion still succeeds, but pages with no text layer are
 # skipped — 135 of the 3,255 pages in the current knowledge base need it.
-
-# ── Core API + server ────────────────────────────────────────────────────────
-fastapi>=0.111.0
-uvicorn[standard]>=0.29.0
-python-multipart>=0.0.9
-pydantic>=2.7.0
-
-# ── LLM providers ────────────────────────────────────────────────────────────
-groq>=0.9.0
-google-genai>=1.0.0
-
-# ── Environment ──────────────────────────────────────────────────────────────
-python-dotenv>=1.0.0
-
-# ── Vector store ─────────────────────────────────────────────────────────────
-pinecone>=3.0.0
-
-# ── Embeddings + reranking ───────────────────────────────────────────────────
-# sentence-transformers pulls in torch and transformers.
-#   BAAI/bge-small-en-v1.5   384-dim, 512-token window  (~130 MB)
-#   BAAI/bge-reranker-base   cross-encoder reranker     (~1.1 GB)
-# Both download on first use and cache under ~/.cache/huggingface.
-sentence-transformers>=3.0.0
-transformers>=4.40.0
-
-# ── Document extraction ──────────────────────────────────────────────────────
-PyMuPDF>=1.24.0        # layout-aware blocks, span metadata, page rasterizing
-pdfplumber>=0.11.0     # ruled-table extraction
-python-docx>=1.1.0     # .docx including tables
-pytesseract>=0.3.10    # OCR for scanned pages (needs the tesseract binary)
-Pillow>=10.0.0         # image handling on the OCR path
-
-# ── Security ─────────────────────────────────────────────────────────────────
-PyJWT>=2.8.0           # access tokens
-bcrypt>=4.1.0          # password hashing
-
-# ── Scientific computing ─────────────────────────────────────────────────────
-numpy>=1.24.0
-
+#
+# Models download on first use and cache under ~/.cache/huggingface:
+#   BAAI/bge-small-en-v1.5   384-dim, 512-token window   ~130 MB
+#   BAAI/bge-reranker-base   cross-encoder reranker      ~1.1 GB
+#
 # NOTE: rank-bm25 is no longer required. BM25 term weights are computed at
-# ingest by retrieval/sparse.py and stored as Pinecone sparse vectors, which
-# removes the per-process in-memory index that was rebuilt on every upload.
+# ingest by edupilot/retrieval/sparse.py and stored as Pinecone sparse
+# vectors, which removes the per-process in-memory index that was rebuilt on
+# every upload.
+
+-e .
