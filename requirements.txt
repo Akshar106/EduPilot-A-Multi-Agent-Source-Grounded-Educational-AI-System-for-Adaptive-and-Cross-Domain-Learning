@@ -1,30 +1,50 @@
 # EduPilot — Python Dependencies
 # Install with: pip install -r requirements.txt
+#
+# Optional system dependency: Tesseract OCR, for scanned PDF pages.
+#   macOS    brew install tesseract
+#   Ubuntu   apt-get install tesseract-ocr
+# Without it ingestion still succeeds, but pages with no text layer are
+# skipped — 135 of the 3,255 pages in the current knowledge base need it.
 
-# Core API + server
-groq>=0.9.0
-google-genai>=1.0.0
+# ── Core API + server ────────────────────────────────────────────────────────
 fastapi>=0.111.0
 uvicorn[standard]>=0.29.0
 python-multipart>=0.0.9
+pydantic>=2.7.0
 
-# Environment variable loading
+# ── LLM providers ────────────────────────────────────────────────────────────
+groq>=0.9.0
+google-genai>=1.0.0
+
+# ── Environment ──────────────────────────────────────────────────────────────
 python-dotenv>=1.0.0
 
-# Vector store (Pinecone)
+# ── Vector store ─────────────────────────────────────────────────────────────
 pinecone>=3.0.0
 
-# Embeddings
+# ── Embeddings + reranking ───────────────────────────────────────────────────
+# sentence-transformers pulls in torch and transformers.
+#   BAAI/bge-small-en-v1.5   384-dim, 512-token window  (~130 MB)
+#   BAAI/bge-reranker-base   cross-encoder reranker     (~1.1 GB)
+# Both download on first use and cache under ~/.cache/huggingface.
 sentence-transformers>=3.0.0
+transformers>=4.40.0
 
-# BM25 keyword search
-rank-bm25>=0.2.2
+# ── Document extraction ──────────────────────────────────────────────────────
+PyMuPDF>=1.24.0        # layout-aware blocks, span metadata, page rasterizing
+pdfplumber>=0.11.0     # ruled-table extraction
+python-docx>=1.1.0     # .docx including tables
+pytesseract>=0.3.10    # OCR for scanned pages (needs the tesseract binary)
+Pillow>=10.0.0         # image handling on the OCR path
 
-# PDF parsing
-PyMuPDF>=1.24.0
+# ── Security ─────────────────────────────────────────────────────────────────
+PyJWT>=2.8.0           # access tokens
+bcrypt>=4.1.0          # password hashing
 
-# Word document support
-python-docx>=1.1.0
-
-# Scientific computing
+# ── Scientific computing ─────────────────────────────────────────────────────
 numpy>=1.24.0
+
+# NOTE: rank-bm25 is no longer required. BM25 term weights are computed at
+# ingest by retrieval/sparse.py and stored as Pinecone sparse vectors, which
+# removes the per-process in-memory index that was rebuilt on every upload.

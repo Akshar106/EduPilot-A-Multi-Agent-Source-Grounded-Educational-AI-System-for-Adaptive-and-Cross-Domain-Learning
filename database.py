@@ -33,14 +33,29 @@ from config import SQLITE_DB_PATH
 _local = threading.local()
 
 
+#: How long a connection waits for a lock before giving up.
+#:
+#: SQLite defaults to 0, meaning any contention raises "database is locked"
+#: immediately rather than waiting. Three components hold connections to this
+#: file (this module, UserStore, IndexRegistry) and requests run across a
+#: worker pool, so brief contention is routine and must be waited out.
+BUSY_TIMEOUT_MS = 5000
+
+
+def _configure(conn: sqlite3.Connection) -> sqlite3.Connection:
+    """Apply the pragmas every EduPilot connection needs."""
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")      # concurrent readers with one writer
+    conn.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
+    conn.execute("PRAGMA foreign_keys=ON")
+    conn.execute("PRAGMA synchronous=NORMAL")    # safe under WAL, much faster
+    return conn
+
+
 def _get_conn() -> sqlite3.Connection:
     """Return a thread-local SQLite connection (created lazily)."""
     if not hasattr(_local, "conn") or _local.conn is None:
-        conn = sqlite3.connect(SQLITE_DB_PATH, check_same_thread=False)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL")   # better concurrent reads
-        conn.execute("PRAGMA foreign_keys=ON")
-        _local.conn = conn
+        _local.conn = _configure(sqlite3.connect(SQLITE_DB_PATH, check_same_thread=False))
     return _local.conn
 
 
@@ -160,26 +175,131 @@ CREATE INDEX IF NOT EXISTS idx_uploads_domain
     ON uploaded_documents(domain);
 """
 
+#: Schema version. Bump when adding a migration in `_migrate`.
+SCHEMA_VERSION = 2
+
 
 def init_db() -> None:
-    """Create all tables if they don't exist. Safe to call multiple times."""
+    """Create all tables if they don't exist, then apply migrations."""
     with _cursor() as cur:
         cur.executescript(_SCHEMA)
+    _migrate()
+
+
+def _migrate() -> None:
+    """
+    Apply schema migrations, tracked via SQLite's `user_version` pragma.
+
+    The original schema had no versioning — every table was `CREATE TABLE IF
+    NOT EXISTS`, so a column added later would silently never appear on an
+    existing database. This makes upgrades explicit and idempotent.
+    """
+    conn = _get_conn()
+    current = conn.execute("PRAGMA user_version").fetchone()[0]
+
+    if current < 2:
+        # v2 — ownership. Sessions previously belonged to nobody, so any caller
+        # who knew or guessed a session_id could read and delete it.
+        _add_column_if_missing(conn, "chat_sessions", "user_id", "TEXT")
+        _add_column_if_missing(conn, "self_study_sessions", "user_id", "TEXT")
+        conn.executescript(
+            """
+            CREATE INDEX IF NOT EXISTS idx_chat_sessions_user
+                ON chat_sessions(user_id, updated_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_ss_sessions_user
+                ON self_study_sessions(user_id, updated_at DESC);
+            """
+        )
+        conn.commit()
+
+    if current < SCHEMA_VERSION:
+        conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+        conn.commit()
+
+
+def _add_column_if_missing(conn: sqlite3.Connection, table: str, column: str, decl: str) -> None:
+    """ALTER TABLE ADD COLUMN, skipping it when the column already exists."""
+    existing = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+    if column not in existing:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+
+
+def orphaned_session_count() -> dict[str, int]:
+    """
+    Count pre-auth sessions that have no owner.
+
+    Rows created before ownership existed cannot be attributed to a user.
+    They are left in place rather than deleted — destroying a student's
+    history to satisfy a schema change is not an acceptable migration — but
+    the scoped queries below never return them, so nobody can read them.
+    """
+    conn = _get_conn()
+    return {
+        "chat_sessions": conn.execute(
+            "SELECT COUNT(*) AS n FROM chat_sessions WHERE user_id IS NULL"
+        ).fetchone()["n"],
+        "self_study_sessions": conn.execute(
+            "SELECT COUNT(*) AS n FROM self_study_sessions WHERE user_id IS NULL"
+        ).fetchone()["n"],
+    }
+
+
+def claim_orphaned_sessions(user_id: str) -> int:
+    """
+    Assign every unowned legacy session to `user_id`.
+
+    For a single-user upgrade, so the developer running this locally keeps
+    their existing history. Do not call it on a multi-user deployment.
+    """
+    with _cursor() as cur:
+        cur.execute("UPDATE chat_sessions SET user_id=? WHERE user_id IS NULL", (user_id,))
+        claimed = cur.rowcount or 0
+        cur.execute(
+            "UPDATE self_study_sessions SET user_id=? WHERE user_id IS NULL", (user_id,)
+        )
+        claimed += cur.rowcount or 0
+    return claimed
+
+
+# ---------------------------------------------------------------------------
+# Ownership lookups
+# ---------------------------------------------------------------------------
+
+
+def get_session_owner(session_id: str) -> str | None:
+    """user_id owning a chat session, or None when unowned or missing."""
+    row = _get_conn().execute(
+        "SELECT user_id FROM chat_sessions WHERE session_id=?", (session_id,)
+    ).fetchone()
+    return row["user_id"] if row else None
+
+
+def get_ss_session_owner(ss_session_id: str) -> str | None:
+    """user_id owning a study session, or None when unowned or missing."""
+    row = _get_conn().execute(
+        "SELECT user_id FROM self_study_sessions WHERE ss_session_id=?", (ss_session_id,)
+    ).fetchone()
+    return row["user_id"] if row else None
 
 
 # ---------------------------------------------------------------------------
 # Chat session helpers
 # ---------------------------------------------------------------------------
 
-def ensure_session(session_id: str, title: str | None = None) -> None:
-    """Insert a session row if it doesn't exist yet."""
+def ensure_session(session_id: str, user_id: str, title: str | None = None) -> None:
+    """
+    Insert a session row if absent, owned by `user_id`.
+
+    `user_id` is required. It comes from the caller's verified token, never
+    from the request body — a client-supplied owner would reintroduce the
+    original IDOR in a new shape.
+    """
+    if not user_id:
+        raise ValueError("user_id is required to create a session")
     with _cursor() as cur:
         cur.execute(
-            """
-            INSERT OR IGNORE INTO chat_sessions (session_id, title)
-            VALUES (?, ?)
-            """,
-            (session_id, title),
+            "INSERT OR IGNORE INTO chat_sessions (session_id, user_id, title) VALUES (?, ?, ?)",
+            (session_id, user_id, title),
         )
 
 
@@ -191,29 +311,52 @@ def update_session_title(session_id: str, title: str) -> None:
         )
 
 
-def list_sessions(limit: int = 20) -> list[dict]:
-    """Return recent sessions ordered by last activity."""
+def list_sessions(user_id: str, limit: int = 20) -> list[dict]:
+    """
+    Recent sessions belonging to `user_id`, newest activity first.
+
+    Scoped by owner in SQL rather than filtered afterwards. The previous
+    version took no user at all and returned the twenty most recent sessions
+    across every user, which is what made the other endpoints exploitable —
+    it handed out the IDs needed to read and delete anyone's history.
+    """
     conn = _get_conn()
     rows = conn.execute(
         """
-        SELECT s.session_id, s.title, s.created_at,
+        SELECT s.session_id, s.title, s.created_at, s.updated_at,
                COUNT(m.id) AS message_count
         FROM chat_sessions s
         LEFT JOIN chat_messages m ON m.session_id = s.session_id
+        WHERE s.user_id = ?
         GROUP BY s.session_id
         ORDER BY s.updated_at DESC
         LIMIT ?
         """,
-        (limit,),
+        (user_id, limit),
     ).fetchall()
     return [dict(r) for r in rows]
 
 
-def delete_session(session_id: str) -> None:
-    """Delete a session and all its messages."""
+def delete_session(session_id: str, user_id: str) -> bool:
+    """
+    Delete a session and its messages, only if `user_id` owns it.
+
+    Ownership is part of the DELETE predicate rather than a prior SELECT, so
+    there is no window between the check and the delete. Returns False when
+    nothing matched — either the session does not exist or it is not theirs,
+    and the caller must not distinguish the two.
+    """
     with _cursor() as cur:
-        cur.execute("DELETE FROM chat_messages WHERE session_id=?", (session_id,))
-        cur.execute("DELETE FROM chat_sessions  WHERE session_id=?", (session_id,))
+        cur.execute(
+            "DELETE FROM chat_messages WHERE session_id IN "
+            "(SELECT session_id FROM chat_sessions WHERE session_id=? AND user_id=?)",
+            (session_id, user_id),
+        )
+        cur.execute(
+            "DELETE FROM chat_sessions WHERE session_id=? AND user_id=?",
+            (session_id, user_id),
+        )
+        return (cur.rowcount or 0) > 0
 
 
 # ---------------------------------------------------------------------------
@@ -389,26 +532,40 @@ def delete_chunks_by_domain(domain: str) -> None:
 # Self Study — Session helpers
 # ---------------------------------------------------------------------------
 
-def create_ss_session(ss_session_id: str, name: str, description: str | None = None) -> None:
+def create_ss_session(
+    ss_session_id: str, user_id: str, name: str, description: str | None = None
+) -> None:
+    """Create a study session owned by `user_id`."""
+    if not user_id:
+        raise ValueError("user_id is required to create a study session")
     with _cursor() as cur:
         cur.execute(
-            "INSERT INTO self_study_sessions (ss_session_id, name, description) VALUES (?, ?, ?)",
-            (ss_session_id, name, description),
+            "INSERT INTO self_study_sessions (ss_session_id, user_id, name, description) "
+            "VALUES (?, ?, ?, ?)",
+            (ss_session_id, user_id, name, description),
         )
 
 
-def list_ss_sessions() -> list[dict]:
+def list_ss_sessions(user_id: str) -> list[dict]:
+    """
+    Study sessions belonging to `user_id`.
+
+    These carry the student's own uploaded documents, so cross-user exposure
+    here leaks personal files, not just chat text.
+    """
     conn = _get_conn()
     rows = conn.execute(
         """
         SELECT s.ss_session_id, s.name, s.description, s.created_at, s.updated_at,
-               COUNT(DISTINCT d.id)           AS doc_count,
+               COUNT(DISTINCT d.id)            AS doc_count,
                COALESCE(SUM(d.chunk_count), 0) AS total_chunks
         FROM self_study_sessions s
         LEFT JOIN self_study_documents d ON d.ss_session_id = s.ss_session_id
+        WHERE s.user_id = ?
         GROUP BY s.ss_session_id
         ORDER BY s.updated_at DESC
-        """
+        """,
+        (user_id,),
     ).fetchall()
     return [dict(r) for r in rows]
 
