@@ -47,6 +47,18 @@ from edupilot.guardrails.refusal import (  # noqa: F401
 #: reaches the prompt by another path.
 MAX_CHUNK_CHARS = 6000
 
+#: Budget across every chunk in one prompt, ~4k tokens.
+#:
+#: One request runs several LLM calls (router, planner, answerer, verifier,
+#: and occasionally the memory summarizer), and providers meter tokens per
+#: minute across all of them. Sized so a full request stays inside a modest
+#: free-tier allowance; raise it if your provider limit is higher.
+TOTAL_EVIDENCE_CHARS = 16000
+
+#: Floor on each chunk's share, so a large `top_k` still yields usable
+#: excerpts rather than unreadable slivers.
+MIN_CHUNK_SHARE = 900
+
 
 @dataclass
 class SourceFence:
@@ -129,6 +141,7 @@ def build_evidence(
     fence: SourceFence | None = None,
     *,
     max_chars: int = MAX_CHUNK_CHARS,
+    total_max_chars: int = TOTAL_EVIDENCE_CHARS,
 ) -> EvidenceBlock:
     """
     Format retrieved chunks as numbered, fenced source blocks.
@@ -137,6 +150,9 @@ def build_evidence(
         chunks: Objects exposing `.text`, `.metadata`, and optionally
             `.chunk_id` / `.relevance` (a `RerankedChunk`).
         fence: Fence to use. A fresh one is generated when omitted.
+        total_max_chars: Budget across *all* chunks. Each chunk gets an equal
+            share, so prompt size is bounded by this rather than by how large
+            the retrieved passages happen to be.
 
     Returns:
         An `EvidenceBlock` whose `labels` list maps [Source N] back to a
@@ -146,6 +162,14 @@ def build_evidence(
     if not chunks:
         return EvidenceBlock(text="(no source material retrieved)", fence=fence)
 
+    # Budget per chunk rather than per chunk *alone*. A per-chunk cap does not
+    # bound the prompt: eight parent-expanded passages at the 6000-char cap is
+    # ~12k tokens of evidence, and with the router, planner, answerer and
+    # verifier all firing inside one minute that alone trips a provider's
+    # tokens-per-minute ceiling — which surfaces as a 413 and an empty answer.
+    # An equal share keeps every source citable while making size predictable.
+    per_chunk = min(max_chars, max(MIN_CHUNK_SHARE, total_max_chars // len(chunks)))
+
     parts: list[str] = []
     labels: list[str] = []
     ids: list[str] = []
@@ -153,7 +177,11 @@ def build_evidence(
     for i, chunk in enumerate(chunks, start=1):
         meta = dict(getattr(chunk, "metadata", {}) or {})
         label = citation_label(meta)
-        body = fence.scrub(str(getattr(chunk, "text", ""))[:max_chars])
+        raw = str(getattr(chunk, "text", ""))
+        clipped = raw[:per_chunk]
+        if len(raw) > per_chunk:
+            clipped += "\n…(excerpt truncated)"
+        body = fence.scrub(clipped)
 
         labels.append(label)
         ids.append(str(getattr(chunk, "chunk_id", f"chunk-{i}")))

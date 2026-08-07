@@ -420,7 +420,6 @@ async function sendMessage() {
       model: S.config.model,
       top_k: parseInt($('topK').value),
       rerank_top_k: parseInt($('rerankK').value),
-      confidence_threshold: parseFloat($('conf').value),
       enable_verification: $('verifyToggle').checked,
       manual_domains: S.attachedFiles.length
         ? [...new Set(S.attachedFiles.map(a => a.domain))]
@@ -899,7 +898,6 @@ function bindEvents() {
   // Sliders
   $('topK').addEventListener('input', () => $('topKVal').textContent = $('topK').value);
   $('rerankK').addEventListener('input', () => $('rerankKVal').textContent = $('rerankK').value);
-  $('conf').addEventListener('input', () => $('confVal').textContent = parseFloat($('conf').value).toFixed(2));
 
   // Attach chips — remove or click to preview
   $('inputAttachments').addEventListener('click', async e => {
@@ -1347,7 +1345,6 @@ async function ssRunQuery(query, sourceFilter) {
       model: S.config?.model || S.config?.default_model || 'gemini-2.5-flash',
       top_k: parseInt($('topK').value),
       rerank_top_k: parseInt($('rerankK').value),
-      confidence_threshold: parseFloat($('conf').value),
       enable_verification: $('ssVerifyToggle').checked,
       chat_history: SS.chatHistory.slice(-10),
       source_filter: sourceFilter || null,

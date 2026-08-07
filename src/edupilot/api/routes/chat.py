@@ -16,7 +16,7 @@ from edupilot.security import owns_or_admin, rate_limited
 router = APIRouter(prefix="/api", tags=["chat"])
 
 
-def _run_chat(req: ChatRequest, session_id: str) -> dict:
+def _run_chat(req: ChatRequest, session_id: str, user_msg_id: int) -> dict:
     """
     Synchronous pipeline invocation. Runs in the worker pool, never inline.
 
@@ -24,9 +24,52 @@ def _run_chat(req: ChatRequest, session_id: str) -> dict:
     and retrieval stacks — which would make app startup load models.
     """
     from edupilot.agents import PipelineConfig
-    from edupilot.llm import get_usage, start_usage
+    from edupilot.agents.memory import ConversationMemory
+    from edupilot.llm import call_llm, get_usage, start_usage
 
     start_usage()
+
+    # History comes from the database, not `req.chat_history`. The client's
+    # copy is a truncated view it happens to hold, and a client could send
+    # anything at all; the stored conversation is the real one. The digest
+    # keeps long conversations coherent without an unbounded prompt.
+    memory = ConversationMemory(call_llm)
+    digest, recent = memory.context_for(
+        session_id,
+        model=req.model,
+        # The question for this turn is already persisted; it must not appear
+        # in its own history block.
+        exclude_message_ids={user_msg_id},
+    )
+
+    # The cache is only consulted for *standalone* questions — those asked with
+    # no prior turns in the conversation. "Explain that in more detail"
+    # normalizes to the same key no matter what "that" was, so caching by
+    # question text alone would serve one student the answer to another
+    # student's follow-up. A fresh conversation has no such ambiguity.
+    standalone = not digest and not recent
+    cache = services.answer_cache if standalone else None
+    ask_count = 0
+
+    if cache is not None:
+        ask_count = cache.record_ask(
+            req.query, domains=req.manual_domains, model=req.model
+        )
+        hit = cache.lookup(req.query, domains=req.manual_domains, model=req.model)
+        if hit is not None:
+            cached = dict(hit.payload)
+            cached["session_id"] = session_id
+            cached["debug"] = {
+                "cache": {
+                    "hit": True,
+                    "similarity": round(hit.similarity, 4),
+                    "ask_count": hit.ask_count,
+                    "age_seconds": int(hit.age_seconds),
+                },
+                "usage": get_usage().as_dict(),
+            }
+            return cached
+
     cfg = PipelineConfig(
         model=req.model,
         verify_model=VERIFY_MODEL,
@@ -36,14 +79,15 @@ def _run_chat(req: ChatRequest, session_id: str) -> dict:
     result = services.pipeline.run(
         req.query,
         cfg,
-        history=req.chat_history or [],
+        history=recent,
+        memory=digest,
         manual_domains=req.manual_domains,
         filenames=req.attached_filenames,
     )
     diagnostics = dict(result.diagnostics)
     diagnostics["usage"] = get_usage().as_dict()
 
-    return {
+    payload = {
         "session_id": session_id,
         "final_answer": result.final_answer,
         "intent_type": result.intent_type,
@@ -57,8 +101,16 @@ def _run_chat(req: ChatRequest, session_id: str) -> dict:
         "grounding_score": result.grounding_score,
         "guardrail_action": result.verdict.action if result.verdict else None,
         "sources": result.sources,
-        "debug": diagnostics,
     }
+
+    # Promote only once the question has been asked PROMOTE_AFTER times, and
+    # only when the answer is one worth freezing — see should_store.
+    if cache is not None and cache.should_store(ask_count, payload):
+        cache.store(req.query, payload, domains=req.manual_domains, model=req.model)
+
+    diagnostics["cache"] = {"hit": False, "ask_count": ask_count}
+    payload["debug"] = diagnostics
+    return payload
 
 
 @router.post("/chat", dependencies=[Depends(rate_limited("chat"))])
@@ -82,7 +134,7 @@ async def chat(req: ChatRequest, user: CurrentUser):
     if len(db.get_session_messages(session_id)) == 1:
         db.update_session_title(session_id, req.query[:60])
 
-    result = await run_blocking(_run_chat, req, session_id)
+    result = await run_blocking(_run_chat, req, session_id, user_msg_id)
 
     result["assistant_message_id"] = db.save_message(
         session_id=session_id,

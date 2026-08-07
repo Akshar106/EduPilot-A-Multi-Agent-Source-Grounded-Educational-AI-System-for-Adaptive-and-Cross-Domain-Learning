@@ -14,9 +14,12 @@ Pinecone stores only the embedding vectors; the text lives here.
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 
 from .connection import get_conn, transaction
+
+logger = logging.getLogger(__name__)
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS self_study_sessions (
@@ -117,7 +120,7 @@ CREATE INDEX IF NOT EXISTS idx_uploads_domain
 """
 
 #: Schema version. Bump when adding a migration in `_migrate`.
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 def init_db() -> None:
@@ -127,42 +130,89 @@ def init_db() -> None:
     _migrate()
 
 
+#: Columns added after the original schema, as (table, column, declaration).
+#:
+#: Reconciled against the live schema on every startup rather than gated on
+#: `user_version`. A version-gated migration cannot repair itself: if the
+#: counter is advanced but the ALTER does not land — an interrupted startup, or
+#: a version bump committed before its migration body — the column is missing
+#: forever and every query touching it fails. `_add_column_if_missing` is
+#: idempotent and costs one PRAGMA per column, so there is nothing to gain by
+#: skipping it.
+_ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
+    # v2 — ownership. Sessions previously belonged to nobody, so any caller who
+    # knew or guessed a session_id could read and delete it.
+    ("chat_sessions", "user_id", "TEXT"),
+    ("self_study_sessions", "user_id", "TEXT"),
+    # v3 — rolling conversation memory. Older turns are compacted into a digest
+    # so a long chat stays coherent without the prompt growing without bound.
+    # `summary_through_id` records the last message already folded in, so
+    # summarization is incremental rather than re-reading the whole conversation.
+    ("chat_sessions", "summary", "TEXT"),
+    ("chat_sessions", "summary_through_id", "INTEGER"),
+)
+
+_MIGRATION_INDEXES = """
+CREATE INDEX IF NOT EXISTS idx_chat_sessions_user
+    ON chat_sessions(user_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_ss_sessions_user
+    ON self_study_sessions(user_id, updated_at DESC);
+"""
+
+
 def _migrate() -> None:
     """
-    Apply schema migrations, tracked via SQLite's `user_version` pragma.
+    Bring an existing database up to `SCHEMA_VERSION`.
 
     The original schema had no versioning — every table was `CREATE TABLE IF
     NOT EXISTS`, so a column added later would silently never appear on an
-    existing database. This makes upgrades explicit and idempotent.
+    existing database.
+
+    Additive changes are reconciled against the real schema, so a database
+    whose `user_version` claims to be current but is missing a column repairs
+    itself on the next start. `user_version` records progress; it is not the
+    source of truth.
     """
     conn = get_conn()
     current = conn.execute("PRAGMA user_version").fetchone()[0]
 
-    if current < 2:
-        # v2 — ownership. Sessions previously belonged to nobody, so any caller
-        # who knew or guessed a session_id could read and delete it.
-        _add_column_if_missing(conn, "chat_sessions", "user_id", "TEXT")
-        _add_column_if_missing(conn, "self_study_sessions", "user_id", "TEXT")
-        conn.executescript(
-            """
-            CREATE INDEX IF NOT EXISTS idx_chat_sessions_user
-                ON chat_sessions(user_id, updated_at DESC);
-            CREATE INDEX IF NOT EXISTS idx_ss_sessions_user
-                ON self_study_sessions(user_id, updated_at DESC);
-            """
+    repaired = []
+    for table, column, decl in _ADDED_COLUMNS:
+        if _add_column_if_missing(conn, table, column, decl):
+            repaired.append(f"{table}.{column}")
+
+    conn.executescript(_MIGRATION_INDEXES)
+    conn.commit()
+
+    if repaired and current >= SCHEMA_VERSION:
+        # The counter said "current" while the schema was not. Worth a line in
+        # the log: it means a previous startup was interrupted mid-migration.
+        logger.warning(
+            "schema repaired columns missing despite user_version=%d: %s",
+            current, ", ".join(repaired),
         )
-        conn.commit()
+    elif repaired:
+        logger.info("schema migrated to v%d: added %s", SCHEMA_VERSION, ", ".join(repaired))
 
     if current < SCHEMA_VERSION:
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         conn.commit()
 
 
-def _add_column_if_missing(conn: sqlite3.Connection, table: str, column: str, decl: str) -> None:
-    """ALTER TABLE ADD COLUMN, skipping it when the column already exists."""
+def _add_column_if_missing(
+    conn: sqlite3.Connection, table: str, column: str, decl: str
+) -> bool:
+    """
+    ALTER TABLE ADD COLUMN, skipping it when the column already exists.
+
+    Returns True if the column was actually added, so the caller can tell a
+    genuine migration from a no-op.
+    """
     existing = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
-    if column not in existing:
-        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+    if column in existing:
+        return False
+    conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+    return True
 
 
 # ---------------------------------------------------------------------------

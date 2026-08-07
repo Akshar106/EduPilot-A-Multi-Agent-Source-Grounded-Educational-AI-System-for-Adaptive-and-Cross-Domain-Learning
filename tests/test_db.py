@@ -148,3 +148,54 @@ def test_document_chunk_accounting():
 
     db.delete_chunks_by_domain("TESTDOM")
     assert db.chunk_count_by_domain("TESTDOM") == 0
+
+
+# ---------------------------------------------------------------------------
+# Migration robustness
+# ---------------------------------------------------------------------------
+
+
+def test_migration_repairs_a_column_missing_despite_a_current_version():
+    """
+    A version-gated migration cannot repair itself.
+
+    If `user_version` is advanced but the ALTER does not land — an interrupted
+    startup, or a version bump committed ahead of its migration body — a
+    counter-gated migration skips the column forever and every query touching
+    it fails. Reconciling against the real schema fixes it on next start.
+    """
+    conn = db.get_conn()
+
+    # Simulate the broken state: drop the column, leave the version current.
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(chat_sessions)")}
+    if "summary" in cols:
+        conn.execute("ALTER TABLE chat_sessions DROP COLUMN summary")
+    conn.execute(f"PRAGMA user_version = {db.SCHEMA_VERSION}")
+    conn.commit()
+
+    assert "summary" not in {
+        r["name"] for r in conn.execute("PRAGMA table_info(chat_sessions)")
+    }
+
+    db.init_db()
+
+    assert "summary" in {
+        r["name"] for r in conn.execute("PRAGMA table_info(chat_sessions)")
+    }
+
+
+def test_conversation_memory_roundtrip():
+    db.ensure_session("s-memory", "user-1")
+    assert db.get_session_memory("s-memory") == ("", 0)
+
+    mid = db.save_message("s-memory", "user", "hello")
+    db.set_session_memory("s-memory", "Student greeted the tutor.", mid)
+    assert db.get_session_memory("s-memory") == ("Student greeted the tutor.", mid)
+
+
+def test_get_messages_after_returns_only_newer_messages():
+    db.ensure_session("s-after", "user-1")
+    ids = [db.save_message("s-after", "user", f"m{i}") for i in range(4)]
+
+    later = db.get_messages_after("s-after", ids[1])
+    assert [m["content"] for m in later] == ["m2", "m3"]

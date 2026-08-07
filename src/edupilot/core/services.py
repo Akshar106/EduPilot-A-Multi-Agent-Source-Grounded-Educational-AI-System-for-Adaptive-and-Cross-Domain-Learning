@@ -21,6 +21,7 @@ import threading
 from pathlib import Path
 
 from edupilot.core.config import (
+    ANSWER_CACHE_PATH,
     DOMAINS,
     EMBEDDING_CACHE_PATH,
     EMBEDDING_MODEL,
@@ -79,6 +80,7 @@ class Services:
         self._indexer: Indexer | None = None
         self._users: UserStore | None = None
         self._pipeline = None
+        self._answer_cache = None
         self._retrievers: dict[str, HybridRetriever] = {}
         self._sparse_loaded = False
 
@@ -158,6 +160,9 @@ class Services:
             self._sparse = BM25Encoder.load(SPARSE_ENCODER_PATH)
             self._sparse_loaded = True
             self._retrievers.clear()
+            # Rebound on next access against the newly promoted index version,
+            # which makes every entry from the previous corpus unservable.
+            self._answer_cache = None
 
     @property
     def registry(self) -> IndexRegistry:
@@ -188,6 +193,29 @@ class Services:
                         chunking=self.chunking,
                     )
         return self._indexer
+
+    @property
+    def answer_cache(self):
+        """
+        Frequency-gated answer cache, bound to the active index version.
+
+        Built lazily and rebound on `reload_sparse_encoder`, so a promoted
+        rebuild cannot leave entries pointing at a retired corpus.
+        """
+        if self._answer_cache is None:
+            with self._lock:
+                if self._answer_cache is None:
+                    from edupilot.retrieval.answer_cache import AnswerCache
+
+                    self._answer_cache = AnswerCache(
+                        ANSWER_CACHE_PATH,
+                        self.embedder,
+                        index_version=self.index_pointer.active or "",
+                    )
+                    removed = self._answer_cache.sweep()
+                    if removed:
+                        logger.info("answer cache: swept %d stale entries", removed)
+        return self._answer_cache
 
     @property
     def users(self) -> UserStore:

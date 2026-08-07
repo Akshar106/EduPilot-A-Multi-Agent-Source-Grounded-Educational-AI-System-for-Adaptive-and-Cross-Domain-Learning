@@ -14,6 +14,7 @@ search, and reranking.
 means nothing in the knowledge base cleared the relevance floor.
 """
 
+from .answer_cache import AnswerCache, CacheHit, normalize_question
 from .embeddings import (
     Embedder,
     EmbeddingCache,
@@ -39,6 +40,9 @@ from .vectorstore import (
 )
 
 __all__ = [
+    "AnswerCache",
+    "CacheHit",
+    "normalize_question",
     "BM25Encoder",
     "Embedder",
     "EmbeddingCache",

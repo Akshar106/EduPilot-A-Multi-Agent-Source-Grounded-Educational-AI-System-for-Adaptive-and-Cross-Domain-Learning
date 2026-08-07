@@ -26,6 +26,7 @@ from .contracts import (
     parse_json_response,
     strip_refusal_marker,
 )
+from .memory import ConversationMemory, format_memory
 from .pipeline import (
     Answerer,
     EduPilotPipeline,
@@ -41,6 +42,8 @@ from .pipeline import (
 from .prompts import REFUSAL_MARKER
 
 __all__ = [
+    "ConversationMemory",
+    "format_memory",
     "Answerer",
     "EduPilotPipeline",
     "EvidenceBlock",

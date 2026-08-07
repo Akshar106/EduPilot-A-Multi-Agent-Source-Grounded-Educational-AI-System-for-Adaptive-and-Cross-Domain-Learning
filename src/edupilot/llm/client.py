@@ -195,7 +195,16 @@ def _call_gemini(messages: list[dict], system: str | None, model: str, max_token
     if "2.5" in model:
         kwargs["thinking_config"] = types.ThinkingConfig(thinking_budget=0)
 
-    response = genai.Client(api_key=api_key).models.generate_content(
+    # Hold the client in a local for the duration of the call.
+    #
+    # `genai.Client(...).models.generate_content(...)` leaves the Client as a
+    # temporary: `.models` does not keep it alive, so it can be collected
+    # mid-request, closing the underlying HTTP transport. That surfaces as
+    # "Cannot send a request, as the client has been closed" — and because it
+    # hit every Gemini model, it took out the entire fallback chain exactly
+    # when Groq was rate-limited and the fallback was needed most.
+    client = genai.Client(api_key=api_key)
+    response = client.models.generate_content(
         model=model, contents=contents, config=types.GenerateContentConfig(**kwargs)
     )
 

@@ -31,6 +31,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any
 
+from edupilot.core.config import LLM_MAX_TOKENS_GENERATE, LLM_MAX_TOKENS_SYNTH
 from edupilot.guardrails import scan_chunks
 from edupilot.guardrails.output import OutputVerdict, apply_output_guardrails
 from edupilot.retrieval import HybridRetriever, RetrievalConfig, RetrievalResult
@@ -45,6 +46,7 @@ from .contracts import (
     make_fence,
     parse_json_response,
 )
+from .memory import format_memory
 
 logger = logging.getLogger(__name__)
 
@@ -146,10 +148,18 @@ class Router:
         self.domains = domains
 
     def classify(
-        self, query: str, *, model: str, history: Sequence[dict] | None = None
+        self,
+        query: str,
+        *,
+        model: str,
+        history: Sequence[dict] | None = None,
+        memory: str = "",
     ) -> RouterDecision:
+        # The digest matters here as much as in the answerer: routing a
+        # follow-up like "explain that in more detail" requires knowing what
+        # "that" was, and the verbatim window may no longer contain it.
         user_prompt = prompts.ROUTER_USER.format(
-            query=query, history_block=format_history(history)
+            query=query, history_block=format_memory(memory) + format_history(history)
         )
         try:
             raw = self.llm(
@@ -258,6 +268,7 @@ class Answerer:
         model: str,
         max_tokens: int,
         history: Sequence[dict] | None = None,
+        memory: str = "",
         self_study: bool = False,
     ) -> SubAnswer:
         started = time.perf_counter()
@@ -291,7 +302,7 @@ class Answerer:
 
         user_prompt = template.format(
             question=question,
-            history_block=format_history(history),
+            history_block=format_memory(memory) + format_history(history),
             fence_open=fence.open,
             fence_close=fence.close,
             retrieved_chunks=evidence.text,
@@ -444,8 +455,13 @@ class PipelineConfig:
 
     model: str = ""
     verify_model: str = ""
-    max_tokens_answer: int = 2000
-    max_tokens_synth: int = 2500
+
+    # Sourced from config so there is one place to tune generation length.
+    # These were previously hardcoded here at 2000/2500 while config's
+    # LLM_MAX_TOKENS_GENERATE sat unused, which capped detailed answers well
+    # below the intended budget.
+    max_tokens_answer: int = LLM_MAX_TOKENS_GENERATE
+    max_tokens_synth: int = LLM_MAX_TOKENS_SYNTH
     retrieval: RetrievalConfig = field(default_factory=RetrievalConfig)
     enable_verification: bool = True
     enable_grounding_check: bool = True
@@ -482,6 +498,7 @@ class EduPilotPipeline:
         cfg: PipelineConfig,
         *,
         history: Sequence[dict] | None = None,
+        memory: str = "",
         manual_domains: Sequence[str] | None = None,
         filenames: Sequence[str] | None = None,
     ) -> PipelineResult:
@@ -489,7 +506,9 @@ class EduPilotPipeline:
         diagnostics: dict[str, Any] = {}
 
         # --- route --------------------------------------------------------
-        decision = self.router.classify(query, model=cfg.model, history=history)
+        decision = self.router.classify(
+            query, model=cfg.model, history=history, memory=memory
+        )
         diagnostics["router"] = {
             "intent_type": decision.intent_type,
             "domains": decision.domains,
@@ -537,6 +556,7 @@ class EduPilotPipeline:
                 model=cfg.model,
                 max_tokens=cfg.max_tokens_answer,
                 history=history,
+                memory=memory,
             )
 
         if len(sub_questions) == 1:

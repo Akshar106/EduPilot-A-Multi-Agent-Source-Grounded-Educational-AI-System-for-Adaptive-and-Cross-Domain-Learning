@@ -110,6 +110,10 @@ SPARSE_ENCODER_PATH: str = str(STATE_DIR / "bm25.json")
 #: Points at the index version currently serving traffic.
 INDEX_POINTER_PATH: str = str(STATE_DIR / "index_pointer.json")
 
+#: Frequently-asked answer cache. Only questions asked repeatedly are stored,
+#: and every entry is bound to the index version that produced it.
+ANSWER_CACHE_PATH: str = str(STATE_DIR / "answer_cache.db")
+
 # ---------------------------------------------------------------------------
 # Security
 # ---------------------------------------------------------------------------
@@ -253,8 +257,12 @@ DOMAINS: dict[str, dict] = {
 # ---------------------------------------------------------------------------
 # Retrieval parameters
 # ---------------------------------------------------------------------------
-DEFAULT_TOP_K: int = 8
-DEFAULT_RERANK_TOP_K: int = 5
+# Evidence budget. DEFAULT_RERANK_TOP_K is the single strongest lever on
+# answer depth: it is how many chunks the generator actually sees. At 3-5 the
+# model has too little to be detailed from, and the grounding rules correctly
+# stop it inventing the difference — producing short, paraphrase-like answers.
+DEFAULT_TOP_K: int = 12          # candidates retrieved before reranking
+DEFAULT_RERANK_TOP_K: int = 8    # chunks handed to the generator
 
 # Chunking is now measured in embedding-model TOKENS, not words. The previous
 # 800-*word* setting was applied per PDF page, so it almost never bound: 46% of
@@ -323,11 +331,12 @@ ENABLE_VERIFICATION_DEFAULT: bool = True
 # Available models (for sidebar dropdown)
 # Groq models are prefixed with "groq:" to distinguish them from Gemini.
 # ---------------------------------------------------------------------------
+# gemma2-9b-it was removed: Groq decommissioned it, so every call returned
+# 400 and it silently consumed a slot in the fallback chain.
 AVAILABLE_MODELS: list[str] = [
-    # ── Groq (free, unlimited, fast) ────────────────────────────────────────
-    "llama-3.3-70b-versatile",    # Groq: best quality, 14,400 req/day free
-    "llama-3.1-8b-instant",       # Groq: fastest, very high free quota
-    "gemma2-9b-it",               # Groq: Google Gemma 2, high free quota
+    # ── Groq (free tier, fast) ──────────────────────────────────────────────
+    "llama-3.3-70b-versatile",    # best quality
+    "llama-3.1-8b-instant",       # fastest, higher free quota
     # ── Gemini (Google AI Studio) ───────────────────────────────────────────
     "gemini-2.0-flash",           # 1500 req/day free
     "gemini-2.0-flash-lite",      # highest Gemini free quota
@@ -338,5 +347,4 @@ AVAILABLE_MODELS: list[str] = [
 GROQ_MODELS: list[str] = [
     "llama-3.3-70b-versatile",
     "llama-3.1-8b-instant",
-    "gemma2-9b-it",
 ]
