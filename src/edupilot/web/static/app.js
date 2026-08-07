@@ -739,14 +739,14 @@ async function renderKBTab() {
 
 // ── Evaluation ─────────────────────────────────────────
 // ── Evaluation ─────────────────────────────────────────
-// Cases are listed here and run one-per-request. A full pass is ~25 minutes,
-// so a single "run everything" request would time out in the browser and hold
-// a server worker the whole time; the loop lives on this side instead, which
-// also makes progress reportable and the run abortable.
+// One case per request. Each is several LLM calls, so cases are scored
+// individually and their results accumulate into the summary. Running the
+// whole suite is the `edupilot-evaluate` CLI, which is better suited to a
+// 25-minute job than a browser tab.
 let EVAL_CASES   = [];
-let EVAL_RESULTS = {};       // case id -> result row
-let EVAL_RUNNING = false;
-let EVAL_ABORT   = false;
+let EVAL_RESULTS = {};       // case id -> result row ('running' while in flight)
+let EVAL_RUNNING = false;    // one at a time: concurrent runs would thrash the
+                             // provider's per-minute token budget
 
 const EVAL_CATEGORY_LABEL = {
   'single-domain': 'single',
@@ -842,7 +842,7 @@ function renderEvalCases() {
   }).join('');
 
   list.querySelectorAll('.eval-run-one').forEach(b =>
-    b.addEventListener('click', () => runEvalCases([b.dataset.id]))
+    b.addEventListener('click', () => runEvalCase(b.dataset.id))
   );
 }
 
@@ -860,50 +860,25 @@ function evalRequestBody() {
   };
 }
 
-async function runEvalCases(ids) {
-  if (EVAL_RUNNING || !ids.length) return;
+async function runEvalCase(id) {
+  if (EVAL_RUNNING) return;
   EVAL_RUNNING = true;
-  EVAL_ABORT = false;
 
-  $('runAllBtn').disabled = true;
-  $('stopEvalBtn').hidden = false;
-  $('evalProgress').hidden = false;
-  $('evalSummary').hidden = true;
+  EVAL_RESULTS[id] = 'running';
+  renderEvalCases();
 
-  const body = evalRequestBody();
-  let done = 0;
-
-  for (const id of ids) {
-    if (EVAL_ABORT) break;
-
-    EVAL_RESULTS[id] = 'running';
-    $('progressLabel').textContent = `Running ${id} — ${done}/${ids.length} complete`;
-    $('progressFill').style.width = `${Math.round(done / ids.length * 100)}%`;
-    renderEvalCases();
-
-    try {
-      EVAL_RESULTS[id] = await post(`/api/evaluate/cases/${encodeURIComponent(id)}`, body);
-    } catch (err) {
-      EVAL_RESULTS[id] = {
-        id, passed: false, intent_match: false, domain_match: false,
-        error: err.message, latency_ms: 0, behavior_notes: 'Request failed.',
-      };
-    }
-    done++;
-    renderEvalCases();
+  try {
+    EVAL_RESULTS[id] = await post(`/api/evaluate/cases/${encodeURIComponent(id)}`, evalRequestBody());
+  } catch (err) {
+    EVAL_RESULTS[id] = {
+      id, passed: false, intent_match: false, domain_match: false,
+      error: err.message, latency_ms: 0, behavior_notes: 'Request failed.',
+    };
   }
 
-  $('progressFill').style.width = '100%';
-  $('progressLabel').textContent = EVAL_ABORT
-    ? `Stopped — ${done}/${ids.length} completed`
-    : `Complete — ${done}/${ids.length}`;
-
   EVAL_RUNNING = false;
-  $('runAllBtn').disabled = false;
-  $('stopEvalBtn').hidden = true;
   renderEvalCases();
   await renderEvalSummary();
-  setTimeout(() => { $('evalProgress').hidden = true; }, 4000);
 }
 
 async function renderEvalSummary() {
@@ -1079,16 +1054,8 @@ function bindEvents() {
   // Preview close
   $('previewClose').addEventListener('click', closePreview);
 
-  // Evaluation
+  // Evaluation — one case at a time; the whole suite is the CLI's job.
   $('evalFilter')?.addEventListener('input', renderEvalCases);
-  // Run All runs what is *showing*, so filtering first is how you scope a run.
-  $('runAllBtn')?.addEventListener('click', () =>
-    runEvalCases(visibleEvalCases().map(tc => tc.id)));
-  $('stopEvalBtn')?.addEventListener('click', () => {
-    EVAL_ABORT = true;
-    $('stopEvalBtn').disabled = true;
-    $('progressLabel').textContent = 'Stopping after the current case…';
-  });
 
   // Self Study
   bindSSEvents();

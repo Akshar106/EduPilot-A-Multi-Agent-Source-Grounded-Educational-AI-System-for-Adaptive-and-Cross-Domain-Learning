@@ -499,6 +499,9 @@ textarea#queryInput::placeholder { color: var(--text-light); }
 .eval-toolbar .input { flex: 1; min-width: 220px; }
 .eval-count { font-size: 12px; color: var(--text-muted); white-space: nowrap; }
 
+/* The generic .progress-* rules that lived here belonged to the batch runner
+   and are gone with it. Self Study uploads use their own .ss-progress-* set. */
+
 /* Explains why there is no "Run" button here — the suite is a CLI action. */
 .eval-cli-note {
   background: #FFF8F8; border: 1px solid var(--border);

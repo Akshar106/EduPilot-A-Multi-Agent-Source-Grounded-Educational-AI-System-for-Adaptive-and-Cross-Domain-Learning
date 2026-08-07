@@ -258,27 +258,20 @@
           </div>
 
           <div class="eval-toolbar">
-            <button class="btn btn-primary" id="runAllBtn">Run All</button>
-            <button class="btn btn-secondary" id="stopEvalBtn" hidden>Stop</button>
             <input id="evalFilter" class="input" type="search"
                    placeholder="Filter cases by id, name, domain, or category…" />
             <span id="evalCount" class="eval-count"></span>
           </div>
 
           <div class="eval-cli-note">
-            Each case is several LLM calls, so a full pass takes roughly
-            <strong>25 minutes</strong>. Filter first and press Run All to run
-            only what is showing — <code>edge-case</code> and
-            <code>adversarial</code> are the quick, interesting ones.
+            Press <strong>Run</strong> on any case to score it — each takes a few
+            seconds to about a minute, since it is several LLM calls. Results
+            accumulate into the summary above the list.
             <span class="eval-cli-hint">
-              Scriptable equivalent: <code>edupilot-evaluate --category edge-case</code>
-              (exits non-zero on failure, <code>--json out.json</code> for raw results).
+              To run the whole suite at once, use the CLI:
+              <code>edupilot-evaluate</code> (or <code>--category edge-case</code>,
+              <code>--json out.json</code>; exits non-zero if any case fails).
             </span>
-          </div>
-
-          <div id="evalProgress" hidden>
-            <div class="progress-bar"><div id="progressFill" class="progress-fill" style="width:0%"></div></div>
-            <div id="progressLabel" class="progress-label"></div>
           </div>
 
           <div id="evalSummary" class="eval-summary" hidden></div>
