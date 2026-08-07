@@ -7,6 +7,8 @@ what the request schemas accept — without starting a server or calling an LLM.
 
 from __future__ import annotations
 
+import re
+
 import pytest
 from pydantic import ValidationError
 
@@ -180,3 +182,36 @@ def test_unchanged_assets_revalidate_cheaply(app):
         second = client.get("/static/app.js", headers={"If-None-Match": etag})
         assert second.status_code == 304
         assert not second.content
+
+
+def test_asset_urls_carry_a_content_derived_version(app):
+    """
+    Hand-written `?v=6` markers never get bumped, so a deploy reuses the same
+    URL with different bytes and the browser keeps its cached copy. That
+    produced a mixed frontend: new HTML plus stale JS, failing on elements the
+    old script still expected.
+    """
+    from fastapi.testclient import TestClient
+
+    with TestClient(app) as client:
+        html = client.get("/").text
+
+    stamps = re.findall(r"/static/(?:app\.js|style\.css)\?v=([a-f0-9]+)", html)
+    assert len(stamps) >= 2, "both app.js and style.css must be version-stamped"
+    assert len(set(stamps)) == 1, "one build stamp should cover the bundle"
+    assert not re.search(r"\?v=\d+\b", html), "a hand-written version marker survived"
+
+
+def test_the_version_stamp_tracks_the_files(app, tmp_path):
+    """A changed asset must produce a different URL, or caches never refresh."""
+    from edupilot.api.routes.system import _asset_version
+    from edupilot.core.config import STATIC_DIR
+
+    before = _asset_version()
+    target = STATIC_DIR / "app.js"
+    original = target.read_bytes()
+    try:
+        target.write_bytes(original + b"\n// touch\n")
+        assert _asset_version() != before
+    finally:
+        target.write_bytes(original)
