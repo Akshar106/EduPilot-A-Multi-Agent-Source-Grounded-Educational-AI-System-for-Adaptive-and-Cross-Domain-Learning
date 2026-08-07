@@ -313,7 +313,17 @@ class PineconeVectorStore(VectorStore):
         self._client = None
         self._index = None
         self._index_name: str | None = None
-        self._lock = threading.Lock()
+        # RLock, not Lock. `index` holds this lock and then calls
+        # `ensure_index`, which reads `self.client` — and `client` acquires the
+        # same lock to build the SDK handle. With a plain Lock that is a
+        # self-deadlock: the thread blocks forever waiting for a lock it is
+        # already holding, at 0% CPU, with no other thread able to release it.
+        #
+        # It only triggers on a store whose client has not been built yet,
+        # which is why serving traffic never hit it and every `--rebuild` hung:
+        # `store_for_index()` returns a fresh instance, so the first upsert
+        # takes exactly this path. Same reasoning as Services._lock.
+        self._lock = threading.RLock()
 
     # -- connection --------------------------------------------------------
 
