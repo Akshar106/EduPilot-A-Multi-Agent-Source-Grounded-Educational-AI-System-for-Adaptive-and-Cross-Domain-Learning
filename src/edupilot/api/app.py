@@ -29,6 +29,7 @@ from edupilot import db
 from edupilot.api.deps import shutdown_executor
 from edupilot.api.routes import ROUTERS
 from edupilot.core.config import (
+    AUTH_REQUIRED,
     BOOTSTRAP_ADMIN_EMAIL,
     BOOTSTRAP_ADMIN_PASSWORD,
     CORS_ALLOWED_ORIGINS,
@@ -58,6 +59,10 @@ def _bootstrap_admin() -> None:
     if services.users.count_users() > 0:
         return
     if not (BOOTSTRAP_ADMIN_EMAIL and BOOTSTRAP_ADMIN_PASSWORD):
+        if not AUTH_REQUIRED:
+            # Single-user mode already grants admin, so there is nothing to
+            # bootstrap and nothing to warn about.
+            return
         logger.warning(
             "No users exist and BOOTSTRAP_ADMIN_EMAIL/PASSWORD are unset — "
             "knowledge-base administration is unreachable. Set both and restart."
@@ -84,8 +89,18 @@ async def lifespan(app: FastAPI):
         logger.warning(
             "%d chat and %d study sessions predate authentication and have no owner. "
             "They are hidden from all users. Run "
-            "`python scripts/reindex.py --claim-sessions <email>` to assign them.",
+            "`edupilot-reindex --claim-sessions <email>` to assign them to a "
+            "registered account.",
             orphans["chat_sessions"], orphans["self_study_sessions"],
+        )
+
+    if not AUTH_REQUIRED:
+        from edupilot.security.deps import LOCAL_USER
+
+        logger.warning(
+            "single-user mode: authentication is OFF, every request runs as %s "
+            "with admin rights. Set EDUPILOT_AUTH_REQUIRED=true to require sign-in.",
+            LOCAL_USER.user_id,
         )
 
     _bootstrap_admin()

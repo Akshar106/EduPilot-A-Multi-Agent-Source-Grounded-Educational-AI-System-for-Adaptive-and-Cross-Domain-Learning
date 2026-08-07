@@ -18,11 +18,27 @@ from typing import Annotated
 
 from fastapi import Depends, Header, Request
 
-from .auth import AuthError, User, decode_access_token
+from .auth import AuthError, Role, User, decode_access_token
 from .errors import AppError, ErrorCode
 from .ratelimit import RateLimitExceeded, limiter
 
 logger = logging.getLogger(__name__)
+
+#: The identity every request resolves to when AUTH_REQUIRED is false.
+#:
+#: A stable id, not a random one — sessions and study uploads are stored
+#: against it, so it has to survive a restart or the operator's history
+#: disappears. Admin, because a single-user install still needs to manage its
+#: own knowledge base.
+#:
+#: config.py refuses to start with auth disabled in production, so this can
+#: never become the identity of an anonymous internet caller.
+LOCAL_USER = User(
+    user_id="local-single-user",
+    email="local@edupilot.invalid",
+    role=Role.ADMIN,
+    display_name="Local User",
+)
 
 
 def client_ip(request: Request) -> str:
@@ -61,17 +77,31 @@ async def current_user(
 
     Accepts a bearer token, falling back to the `edupilot_access` cookie so a
     browser session works without JavaScript holding the token.
-    """
-    token = _bearer_token(authorization) or request.cookies.get("edupilot_access")
-    if not token:
-        raise AppError(code=ErrorCode.UNAUTHENTICATED, internal="no token presented")
 
-    try:
-        return decode_access_token(token)
-    except AuthError as exc:
-        raise AppError(
-            code=ErrorCode.UNAUTHENTICATED, message=exc.message, internal=str(exc)
-        ) from exc
+    When AUTH_REQUIRED is false this never rejects: a valid token still wins,
+    so a signed-in operator keeps their own identity, but anything else
+    resolves to LOCAL_USER instead of a 401.
+    """
+    from edupilot.core.config import AUTH_REQUIRED
+
+    token = _bearer_token(authorization) or request.cookies.get("edupilot_access")
+
+    if token:
+        try:
+            return decode_access_token(token)
+        except AuthError as exc:
+            if AUTH_REQUIRED:
+                raise AppError(
+                    code=ErrorCode.UNAUTHENTICATED, message=exc.message, internal=str(exc)
+                ) from exc
+            # Expired or malformed token in single-user mode: fall through
+            # rather than locking the operator out of their own install.
+            logger.debug("ignoring unusable token in single-user mode: %s", exc)
+
+    if not AUTH_REQUIRED:
+        return LOCAL_USER
+
+    raise AppError(code=ErrorCode.UNAUTHENTICATED, internal="no token presented")
 
 
 async def optional_user(

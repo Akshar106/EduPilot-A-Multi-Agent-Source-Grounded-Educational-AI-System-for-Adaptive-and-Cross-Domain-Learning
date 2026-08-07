@@ -31,6 +31,17 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
+# Deliberate re-export, not dead weight: `agents/__init__.py` pulls these from
+# here so agent code has a single import surface for the contract types and the
+# refusal protocol together. Unused *in this module*, which is why they need the
+# noqa — an automated "unused import" cleanup will otherwise delete them and
+# break `from edupilot.agents import ...` at runtime.
+from edupilot.guardrails.refusal import (  # noqa: F401
+    REFUSAL_MARKER,
+    is_refusal,
+    strip_refusal_marker,
+)
+
 #: Maximum characters of a single chunk placed in a prompt. Chunks are already
 #: token-bounded by the chunker; this is a defensive cap for anything that
 #: reaches the prompt by another path.

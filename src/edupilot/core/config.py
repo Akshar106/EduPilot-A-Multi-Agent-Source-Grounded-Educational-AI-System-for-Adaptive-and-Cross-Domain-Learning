@@ -116,6 +116,32 @@ INDEX_POINTER_PATH: str = str(STATE_DIR / "index_pointer.json")
 ENV: str = os.getenv("EDUPILOT_ENV", "development").lower()
 IS_PRODUCTION: bool = ENV == "production"
 
+# ---------------------------------------------------------------------------
+# Single-user mode
+#
+# With auth disabled there is no sign-in: every request resolves to one fixed
+# local identity (see security/deps.LOCAL_USER). This is not the same as
+# removing access control — the ownership model is untouched, and sessions are
+# still written with an owner. It only removes the login step for a local,
+# single-operator install.
+#
+# Defaults off in development, on in production, and the guard below makes it
+# impossible to disable in production even by setting the variable: an open
+# knowledge base means any visitor can inject documents that every student's
+# answers are then grounded in.
+# ---------------------------------------------------------------------------
+AUTH_REQUIRED: bool = (
+    os.getenv("EDUPILOT_AUTH_REQUIRED", "true" if IS_PRODUCTION else "false").lower()
+    == "true"
+)
+
+if IS_PRODUCTION and not AUTH_REQUIRED:
+    raise RuntimeError(
+        "EDUPILOT_AUTH_REQUIRED=false is refused when EDUPILOT_ENV=production. "
+        "Single-user mode grants every caller admin rights over the shared "
+        "knowledge base."
+    )
+
 # Signing key for JWTs. Required in production; security/auth.py raises at
 # startup rather than falling back to a default, because a predictable signing
 # key lets anyone mint an admin token.

@@ -739,173 +739,74 @@ async function renderKBTab() {
 }
 
 // ── Evaluation ─────────────────────────────────────────
+// The suite is listed here, never executed here — running it is
+// `edupilot-evaluate` on the CLI. See the note in the Evaluation tab.
+let EVAL_CASES = [];
+
+const EVAL_CATEGORY_LABEL = {
+  'single-domain': 'single',
+  'multi-domain':  'multi',
+  'edge-case':     'edge',
+  'adversarial':   'adversarial',
+};
+
 async function loadEvalCases() {
+  const list = $('evalResults');
   try {
     const data = await apiFetch('/api/evaluate/cases');
-    $('singleTcSelect').innerHTML = data.test_cases
-      .map(tc => `<option value="${tc.id}">${tc.id}: ${escHtml(tc.name)}</option>`).join('');
-  } catch {}
-}
-
-async function runAllEvals() {
-  const prog = $('evalProgress');
-  prog.hidden = false;
-  $('progressFill').style.width = '5%';
-  $('progressLabel').textContent = 'Running all 10 test cases… (this may take 1–2 min)';
-  $('runAllBtn').disabled = true;
-  $('evalResults').innerHTML = '';
-  $('evalSummary').hidden = true;
-
-  try {
-    const res = await fetch('/api/evaluate', { method: 'POST' });
-    if (!res.ok) {
-      const text = await res.text();
-      throw new Error(`Server error ${res.status}: ${text.slice(0, 200)}`);
-    }
-    const data = await res.json();
-    $('progressFill').style.width = '100%';
-    $('progressLabel').textContent = `✅ Complete — ${data.stats.passed}/${data.stats.total} passed`;
-    setTimeout(() => { prog.hidden = true; }, 3000);
-    renderEvalSummary(data.stats);
-    renderEvalResults(data.results);
+    EVAL_CASES = data.test_cases || [];
+    renderEvalCases();
   } catch (err) {
-    $('progressFill').style.width = '100%';
-    $('progressFill').style.background = 'var(--error)';
-    $('progressLabel').textContent = `❌ ${err.message}`;
-    setTimeout(() => { $('progressFill').style.background = ''; prog.hidden = true; }, 5000);
-  }
-  $('runAllBtn').disabled = false;
-}
-
-async function runSingleEval() {
-  const tcId = $('singleTcSelect').value;
-  if (!tcId) return;
-  $('runSingleBtn').disabled = true;
-  $('evalResults').innerHTML = `<div class="thinking"><div class="dot-bounce"><span></span><span></span><span></span></div> Running ${escHtml(tcId)}…</div>`;
-  try {
-    const res = await fetch(`/api/evaluate/${tcId}`, { method: 'POST' });
-    if (!res.ok) {
-      const text = await res.text();
-      throw new Error(`Server error ${res.status}: ${text.slice(0, 200)}`);
+    EVAL_CASES = [];
+    if (list) {
+      list.innerHTML =
+        `<div class="eval-empty">Could not load test cases: ${escHtml(err.message)}</div>`;
     }
-    const data = await res.json();
-    renderEvalResults([data]);
-  } catch (err) {
-    $('evalResults').innerHTML = `<div style="color:var(--error);padding:12px">Error: ${escHtml(err.message)}</div>`;
   }
-  $('runSingleBtn').disabled = false;
 }
 
-function renderEvalSummary(stats) {
-  const el = $('evalSummary');
-  el.hidden = false;
+function renderEvalCases() {
+  const list = $('evalResults');
+  if (!list) return;
 
-  const catRows = Object.entries(stats.by_category || {}).map(([cat, s]) => {
-    const catPct = s.total ? Math.round(s.passed / s.total * 100) : 0;
-    const color = catPct === 100 ? 'var(--success,#4CAF50)' : catPct >= 50 ? 'var(--iu-crimson)' : 'var(--error,#F44336)';
-    return `<span style="background:#F3F4F6;border-radius:4px;padding:2px 8px;font-size:11px;font-weight:600;color:${color}">${cat}: ${s.passed}/${s.total}</span>`;
-  }).join('');
+  const q = ($('evalFilter')?.value || '').trim().toLowerCase();
+  const shown = !q ? EVAL_CASES : EVAL_CASES.filter(tc =>
+    [tc.id, tc.name, tc.category, tc.query, ...(tc.expected_domains || [])]
+      .join(' ').toLowerCase().includes(q)
+  );
 
-  function statColor(v, good=0.80, ok=0.65) {
-    return v >= good ? 'var(--success,#4CAF50)' : v >= ok ? '#FF9800' : 'var(--error,#F44336)';
+  const count = $('evalCount');
+  if (count) {
+    count.textContent = shown.length === EVAL_CASES.length
+      ? `${EVAL_CASES.length} cases`
+      : `${shown.length} of ${EVAL_CASES.length} cases`;
   }
 
-  const aqScore = stats.avg_answer_quality || stats.avg_quality_score || 0;
-  const aqLabel = stats.answer_tests_count != null
-    ? `LLM Quality (${stats.answer_tests_count} graded)` : 'LLM Quality';
+  if (!shown.length) {
+    list.innerHTML = `<div class="eval-empty">No cases match “${escHtml(q)}”.</div>`;
+    return;
+  }
 
-  const faithScore = stats.avg_faithfulness || 0;
-  const hitRate    = stats.avg_retrieval_hit_rate || 0;
-  const citAcc     = stats.avg_citation_accuracy || 0;
-  const relevance  = stats.avg_answer_relevance || 0;
-  const latency    = stats.avg_latency_ms || 0;
+  list.innerHTML = shown.map(tc => {
+    const domains = (tc.expected_domains || []).length
+      ? tc.expected_domains.map(d =>
+          `<span class="eval-domain" style="background:${S.domainColors[d] || '#666'}">${escHtml(d)}</span>`
+        ).join('')
+      : `<span class="eval-domain eval-domain-none">refuse</span>`;
 
-  el.innerHTML = `
-    <div style="grid-column:1/-1;font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.6px;margin-bottom:2px">System Behaviour</div>
-    <div class="eval-stat"><div class="eval-stat-val" style="color:${stats.pass_rate>=80?'var(--success,#4CAF50)':'var(--iu-crimson)'}">${stats.pass_rate}%</div><div class="eval-stat-label">Pass Rate (${stats.passed}/${stats.total})</div></div>
-    <div class="eval-stat"><div class="eval-stat-val">${stats.intent_accuracy}%</div><div class="eval-stat-label">Intent Accuracy</div></div>
-    <div class="eval-stat"><div class="eval-stat-val">${stats.domain_accuracy}%</div><div class="eval-stat-label">Domain Accuracy</div></div>
-
-    <div style="grid-column:1/-1;font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.6px;margin-top:8px;margin-bottom:2px">Answer Quality</div>
-    <div class="eval-stat"><div class="eval-stat-val" style="color:${statColor(aqScore)}">${Math.round(aqScore*100)}%</div><div class="eval-stat-label">${aqLabel}</div></div>
-    <div class="eval-stat" title="Fraction of factual claims in the answer supported by retrieved evidence — catches hallucinations"><div class="eval-stat-val" style="color:${statColor(faithScore)}">${Math.round(faithScore*100)}%</div><div class="eval-stat-label">Faithfulness ⓘ</div></div>
-    <div class="eval-stat" title="Cosine similarity between question and answer embeddings — detects off-topic answers"><div class="eval-stat-val" style="color:${statColor(relevance,0.65,0.45)}">${Math.round(relevance*100)}%</div><div class="eval-stat-label">Answer Relevance ⓘ</div></div>
-
-    <div style="grid-column:1/-1;font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.6px;margin-top:8px;margin-bottom:2px">Retrieval &amp; Citations</div>
-    <div class="eval-stat" title="Fraction of expected domain keywords found in retrieved chunks — diagnoses retriever failures"><div class="eval-stat-val" style="color:${statColor(hitRate)}">${Math.round(hitRate*100)}%</div><div class="eval-stat-label">Retrieval Hit Rate ⓘ</div></div>
-    <div class="eval-stat" title="Fraction of [Source N] citations whose surrounding sentence matches the cited chunk's content"><div class="eval-stat-val" style="color:${statColor(citAcc)}">${Math.round(citAcc*100)}%</div><div class="eval-stat-label">Citation Accuracy ⓘ</div></div>
-    <div class="eval-stat"><div class="eval-stat-val" style="color:var(--text-primary)">${Math.round(latency).toLocaleString()} ms</div><div class="eval-stat-label">Avg Latency</div></div>
-
-    ${catRows ? `<div style="grid-column:1/-1;display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:6px"><span style="font-size:11px;color:var(--text-muted);margin-right:4px">By category:</span>${catRows}</div>` : ''}`;
-}
-
-function renderEvalResults(results) {
-  const el = $('evalResults');
-  el.innerHTML = '';
-  const catColors = {
-    'single-domain': '#4CAF50', 'multi-domain': '#2196F3', 'edge-case': '#FF9800',
-    'verification': '#9C27B0', 'citation': '#00BCD4', 'multi-turn': '#F44336',
-  };
-  for (const r of results) {
-    const card = document.createElement('div');
-    card.className = 'eval-card';
-    const catColor = catColors[r.category] || '#888';
-    const catBadge = r.category
-      ? `<span style="font-size:10px;font-weight:600;background:${catColor}18;color:${catColor};border:1px solid ${catColor}40;border-radius:3px;padding:1px 6px">${escHtml(r.category)}</span>`
-      : '';
-    const qualColor = r.quality_score >= 0.75 ? 'var(--success,#4CAF50)' : r.quality_score >= 0.5 ? '#FF9800' : 'var(--error,#F44336)';
-    // Mismatch highlights
-    const mismatches = [];
-    if (r.intent_match === false) mismatches.push(`Intent mismatch: got <b>${escHtml(r.actual_intent||'?')}</b>`);
-    if (r.domain_match === false) mismatches.push(`Domain mismatch: got <b>[${escHtml((r.actual_domains||[]).join(', '))}]</b>`);
-    const mismatchHtml = mismatches.length
-      ? `<div style="background:#FFF3E0;border:1px solid #FFB74D;border-radius:4px;padding:8px 10px;font-size:12px;color:#E65100">${mismatches.join(' &nbsp;|&nbsp; ')}</div>`
-      : '';
-
-    // helper: colour-code a 0-1 score
-    const sc = (v, good=0.80, ok=0.65) =>
-      v == null ? '' : `color:${v>=good?'var(--success,#4CAF50)':v>=ok?'#FF9800':'var(--error,#F44336)'}`;
-
-    const faithScore  = r.faithfulness_score;
-    const hitRate     = r.retrieval_hit_rate;
-    const citAcc      = r.citation_accuracy;
-    const relevance   = r.answer_relevance;
-    const latencyMs   = r.latency_ms;
-
-    // Only show objective metrics when they are meaningful (>0 or not null)
-    const hasMetrics  = faithScore != null || hitRate != null;
-
-    card.innerHTML = `
-      <div class="eval-card-header" onclick="this.nextElementSibling.classList.toggle('open')">
-        <span style="font-size:15px">${r.passed ? '✅' : '❌'}</span>
-        <span class="eval-tc-name">${escHtml(r.test_case_id||'')} — ${escHtml(r.name||'')}</span>
-        ${catBadge}
-        <span style="font-size:13px;font-weight:700;color:${qualColor}">${r.quality_score != null ? pct(r.quality_score) : ''}</span>
-        ${faithScore != null ? `<span style="font-size:11px;${sc(faithScore)}" title="Faithfulness">F:${pct(faithScore)}</span>` : ''}
-        ${latencyMs != null ? `<span style="font-size:11px;color:var(--text-muted)">${Math.round(latencyMs).toLocaleString()}ms</span>` : ''}
-        <span style="color:var(--text-muted)">▾</span>
-      </div>
-      <div class="eval-card-body">
-        <div class="eval-meta-row">
-          <div class="eval-meta"><div class="eval-meta-key">Intent Check</div><div class="eval-meta-val">${r.intent_match?'✅ Pass':'❌ Fail'} &nbsp;<span style="font-weight:400;font-size:12px;color:var(--text-muted)">${escHtml(r.actual_intent||'—')}</span></div></div>
-          <div class="eval-meta"><div class="eval-meta-key">Domain Check</div><div class="eval-meta-val">${r.domain_match?'✅ Pass':'❌ Fail'} &nbsp;<span style="font-weight:400;font-size:12px;color:var(--text-muted)">${escHtml((r.actual_domains||[]).join(', ')||'—')}</span></div></div>
-          <div class="eval-meta"><div class="eval-meta-key">LLM Quality</div><div class="eval-meta-val" style="${sc(r.quality_score)}">${r.quality_score != null ? pct(r.quality_score) : 'N/A'}</div></div>
+    return `
+      <div class="eval-case" data-cat="${escHtml(tc.category)}">
+        <div class="eval-case-head">
+          <span class="eval-id">${escHtml(tc.id)}</span>
+          <span class="eval-name">${escHtml(tc.name)}</span>
+          <span class="eval-cat eval-cat-${escHtml(tc.category)}">${escHtml(EVAL_CATEGORY_LABEL[tc.category] || tc.category)}</span>
+          <span class="eval-intent">${escHtml(tc.expected_intent)}</span>
+          ${domains}
         </div>
-        ${hasMetrics ? `
-        <div class="eval-meta-row" style="margin-top:6px">
-          <div class="eval-meta" title="Fraction of factual claims supported by retrieved evidence"><div class="eval-meta-key">Faithfulness</div><div class="eval-meta-val" style="${sc(faithScore)}">${faithScore != null ? pct(faithScore) : '—'}</div></div>
-          <div class="eval-meta" title="Fraction of expected keywords found in retrieved chunks"><div class="eval-meta-key">Retrieval Hit Rate</div><div class="eval-meta-val" style="${sc(hitRate)}">${hitRate != null ? pct(hitRate) : '—'}</div></div>
-          <div class="eval-meta" title="Fraction of [Source N] citations verified against chunk content"><div class="eval-meta-key">Citation Accuracy</div><div class="eval-meta-val" style="${sc(citAcc)}">${citAcc != null ? pct(citAcc) : '—'}</div></div>
-          <div class="eval-meta" title="Cosine similarity between question and answer embeddings"><div class="eval-meta-key">Answer Relevance</div><div class="eval-meta-val" style="${sc(relevance,0.65,0.45)}">${relevance != null ? pct(relevance) : '—'}</div></div>
-          <div class="eval-meta"><div class="eval-meta-key">Latency</div><div class="eval-meta-val">${latencyMs != null ? Math.round(latencyMs).toLocaleString()+'ms' : '—'}</div></div>
-        </div>` : ''}
-        ${mismatchHtml}
-        ${r.expected_behavior ? `<div class="eval-answer"><b style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px">Expected Behavior</b><br>${escHtml(r.expected_behavior)}</div>` : ''}
-        ${r.answer_preview ? `<div class="eval-answer"><b style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px">Answer Preview</b><br>${escHtml(r.answer_preview)}${r.answer_preview.length >= 500 ? '…' : ''}</div>` : ''}
-        ${r.error ? `<div style="background:#FFEBEE;border:1px solid #EF9A9A;border-radius:4px;padding:8px 10px;color:#C62828;font-size:12px"><b>Error:</b> ${escHtml(r.error)}</div>` : ''}
+        <div class="eval-query">${escHtml(tc.query)}</div>
+        <div class="eval-expect">${escHtml(tc.expected_behavior)}</div>
       </div>`;
-    el.appendChild(card);
-  }
+  }).join('');
 }
 
 // ── Events ─────────────────────────────────────────────
@@ -1045,9 +946,8 @@ function bindEvents() {
   // Preview close
   $('previewClose').addEventListener('click', closePreview);
 
-  // Evaluation
-  $('runAllBtn').addEventListener('click', runAllEvals);
-  $('runSingleBtn').addEventListener('click', runSingleEval);
+  // Evaluation — listing only; running the suite is the edupilot-evaluate CLI.
+  $('evalFilter')?.addEventListener('input', renderEvalCases);
 
   // Self Study
   bindSSEvents();

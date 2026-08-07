@@ -379,6 +379,28 @@ uvicorn edupilot.api.app:app --host 0.0.0.0 --port 8000 --reload
 
 The frontend is a single-page app served by the same process — there is no separate UI server to start.
 
+### Single-user mode
+
+By default in development, `EDUPILOT_AUTH_REQUIRED=false`: there is no sign-in, and every request resolves to one fixed local identity (`local-single-user`) with admin rights. That is what lets the bundled frontend work without a login screen. Access control is not removed — sessions and uploads still carry an owner, and every ownership check still runs; there is simply one owner.
+
+Production always requires authentication. Setting `EDUPILOT_AUTH_REQUIRED=false` with `EDUPILOT_ENV=production` is **refused at startup**, because an open knowledge base lets any visitor inject documents that every student's answers are then grounded in.
+
+To require sign-in locally, set `EDUPILOT_AUTH_REQUIRED=true` and register through `POST /api/auth/register`. Note the bundled frontend has no login UI, so it will need one before that mode is usable in a browser.
+
+### Troubleshooting
+
+**`ModuleNotFoundError: No module named 'edupilot'`** — the editable install's `.pth` file is not being honoured. On macOS this happens when the repo lives in an iCloud-synced folder (`~/Documents` with Desktop & Documents sync on): iCloud sets the `hidden` flag on files inside `.venv`, and Python 3.14 skips hidden `.pth` files. Work around it with an explicit path, or move the repo outside the synced folder:
+
+```bash
+PYTHONPATH="$PWD/src" uvicorn edupilot.api.app:app --reload --port 8000
+```
+
+**`bad interpreter` when running `.venv/bin/uvicorn`** — the script's shebang is baked in at install time and breaks if the project moves, or if the absolute path exceeds the kernel's ~127-character shebang limit. Invoke the module instead, which has no shebang:
+
+```bash
+./.venv/bin/python -m uvicorn edupilot.api.app:app --reload --port 8000
+```
+
 ---
 
 ## Evaluation Suite
