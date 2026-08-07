@@ -10,9 +10,9 @@ Run the 50-case suite against the local pipeline and print a scorecard.
 
 Equivalently, `python -m edupilot.cli.evaluate`.
 
-This is a CLI rather than an API route on purpose: a full pass is hundreds of
-LLM calls, which is an operator decision, not something a logged-in student
-should be able to trigger over HTTP.
+The Evaluation tab in the UI runs the same suite through the same
+`build_pipeline_fn`, one case per request. Use this when you want a scriptable
+run, a CI gate (it exits non-zero on any failure), or a JSON artifact.
 """
 
 from __future__ import annotations
@@ -22,57 +22,12 @@ import json
 import logging
 import sys
 
-from edupilot.core.config import DEFAULT_MODEL, DEFAULT_RERANK_TOP_K, DEFAULT_TOP_K, VERIFY_MODEL
+from edupilot.core.config import DEFAULT_MODEL, DEFAULT_RERANK_TOP_K, DEFAULT_TOP_K
 from edupilot.core.observability import configure_logging
+from edupilot.evaluation.live import build_pipeline_fn
 
 configure_logging()
 logger = logging.getLogger("edupilot.evaluate")
-
-
-def _build_pipeline_fn():
-    """
-    Adapt the agent pipeline to the (query, model, top_k, ...) -> dict contract
-    the evaluation runner expects.
-    """
-    from edupilot.agents import PipelineConfig
-    from edupilot.core.services import services
-    from edupilot.retrieval import RetrievalConfig
-
-    def pipeline_fn(
-        query: str,
-        model: str,
-        top_k: int,
-        rerank_top_k: int,
-        enable_verification: bool,
-    ) -> dict:
-        result = services.pipeline.run(
-            query,
-            PipelineConfig(
-                model=model,
-                verify_model=VERIFY_MODEL,
-                retrieval=RetrievalConfig(
-                    top_k=rerank_top_k,
-                    candidate_multiplier=max(3, top_k // 2),
-                ),
-                enable_verification=enable_verification,
-            ),
-        )
-        return {
-            "final_answer": result.final_answer,
-            "intent_type": result.intent_type,
-            "detected_domains": result.domains,
-            "is_course_related": result.is_course_related,
-            "needs_clarification": result.needs_clarification,
-            "refused": result.refused,
-            # The runner reads `quality_score`; grounding is the only score the
-            # pipeline actually measures, so it is what gets reported.
-            "quality_score": result.grounding_score or 0.0,
-            "grounding_score": result.grounding_score,
-            "sources": result.sources,
-            "debug": dict(result.diagnostics),
-        }
-
-    return pipeline_fn
 
 
 def _print_report(results, stats: dict) -> None:
@@ -129,7 +84,7 @@ def main() -> int:
         logger.error("no test cases matched the given filters")
         return 1
 
-    pipeline_fn = _build_pipeline_fn()
+    pipeline_fn = build_pipeline_fn()
     results = []
     for i, tc in enumerate(cases, 1):
         print(f"[{i}/{len(cases)}] {tc.id} {tc.name}", file=sys.stderr, flush=True)

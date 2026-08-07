@@ -738,9 +738,15 @@ async function renderKBTab() {
 }
 
 // ── Evaluation ─────────────────────────────────────────
-// The suite is listed here, never executed here — running it is
-// `edupilot-evaluate` on the CLI. See the note in the Evaluation tab.
-let EVAL_CASES = [];
+// ── Evaluation ─────────────────────────────────────────
+// Cases are listed here and run one-per-request. A full pass is ~25 minutes,
+// so a single "run everything" request would time out in the browser and hold
+// a server worker the whole time; the loop lives on this side instead, which
+// also makes progress reportable and the run abortable.
+let EVAL_CASES   = [];
+let EVAL_RESULTS = {};       // case id -> result row
+let EVAL_RUNNING = false;
+let EVAL_ABORT   = false;
 
 const EVAL_CATEGORY_LABEL = {
   'single-domain': 'single',
@@ -757,23 +763,24 @@ async function loadEvalCases() {
     renderEvalCases();
   } catch (err) {
     EVAL_CASES = [];
-    if (list) {
-      list.innerHTML =
-        `<div class="eval-empty">Could not load test cases: ${escHtml(err.message)}</div>`;
-    }
+    if (list) list.innerHTML = `<div class="eval-empty">Could not load test cases: ${escHtml(err.message)}</div>`;
   }
+}
+
+function visibleEvalCases() {
+  const q = ($('evalFilter')?.value || '').trim().toLowerCase();
+  if (!q) return EVAL_CASES;
+  return EVAL_CASES.filter(tc =>
+    [tc.id, tc.name, tc.category, tc.query, ...(tc.expected_domains || [])]
+      .join(' ').toLowerCase().includes(q)
+  );
 }
 
 function renderEvalCases() {
   const list = $('evalResults');
   if (!list) return;
 
-  const q = ($('evalFilter')?.value || '').trim().toLowerCase();
-  const shown = !q ? EVAL_CASES : EVAL_CASES.filter(tc =>
-    [tc.id, tc.name, tc.category, tc.query, ...(tc.expected_domains || [])]
-      .join(' ').toLowerCase().includes(q)
-  );
-
+  const shown = visibleEvalCases();
   const count = $('evalCount');
   if (count) {
     count.textContent = shown.length === EVAL_CASES.length
@@ -782,30 +789,158 @@ function renderEvalCases() {
   }
 
   if (!shown.length) {
-    list.innerHTML = `<div class="eval-empty">No cases match “${escHtml(q)}”.</div>`;
+    list.innerHTML = `<div class="eval-empty">No cases match that filter.</div>`;
     return;
   }
 
   list.innerHTML = shown.map(tc => {
+    const r = EVAL_RESULTS[tc.id];
     const domains = (tc.expected_domains || []).length
       ? tc.expected_domains.map(d =>
-          `<span class="eval-domain" style="background:${S.domainColors[d] || '#666'}">${escHtml(d)}</span>`
-        ).join('')
+          `<span class="eval-domain" style="background:${S.domainColors[d] || '#666'}">${escHtml(d)}</span>`).join('')
       : `<span class="eval-domain eval-domain-none">refuse</span>`;
 
+    let status = '';
+    if (r === 'running') {
+      status = `<span class="eval-status eval-running">running…</span>`;
+    } else if (r) {
+      status = r.passed
+        ? `<span class="eval-status eval-pass">PASS</span>`
+        : `<span class="eval-status eval-fail">FAIL</span>`;
+    }
+
+    const metrics = (r && r !== 'running') ? `
+      <div class="eval-metrics">
+        ${metricChip('intent', r.intent_match ? 'ok' : 'MISS', r.intent_match)}
+        ${metricChip('domain', r.domain_match ? 'ok' : 'MISS', r.domain_match)}
+        ${metricChip('faith', r.faithfulness_score?.toFixed(2), r.faithfulness_score >= 0.7)}
+        ${metricChip('hit', r.retrieval_hit_rate?.toFixed(2), r.retrieval_hit_rate >= 0.4)}
+        ${metricChip('cite', r.citation_accuracy?.toFixed(2), r.citation_accuracy >= 0.8)}
+        ${metricChip('ms', Math.round(r.latency_ms), true)}
+      </div>
+      ${r.error ? `<div class="eval-err">${escHtml(r.error)}</div>` : ''}
+      ${!r.passed && r.behavior_notes ? `<div class="eval-err">${escHtml(r.behavior_notes)}</div>` : ''}
+      ${r.answer_preview ? `<details class="eval-preview"><summary>answer preview</summary><div>${escHtml(r.answer_preview)}</div></details>` : ''}
+    ` : '';
+
     return `
-      <div class="eval-case" data-cat="${escHtml(tc.category)}">
+      <div class="eval-case" data-id="${escHtml(tc.id)}">
         <div class="eval-case-head">
           <span class="eval-id">${escHtml(tc.id)}</span>
           <span class="eval-name">${escHtml(tc.name)}</span>
+          ${status}
           <span class="eval-cat eval-cat-${escHtml(tc.category)}">${escHtml(EVAL_CATEGORY_LABEL[tc.category] || tc.category)}</span>
           <span class="eval-intent">${escHtml(tc.expected_intent)}</span>
           ${domains}
+          <button class="btn btn-secondary btn-sm eval-run-one" data-id="${escHtml(tc.id)}"
+                  ${EVAL_RUNNING ? 'disabled' : ''}>Run</button>
         </div>
         <div class="eval-query">${escHtml(tc.query)}</div>
         <div class="eval-expect">${escHtml(tc.expected_behavior)}</div>
+        ${metrics}
       </div>`;
   }).join('');
+
+  list.querySelectorAll('.eval-run-one').forEach(b =>
+    b.addEventListener('click', () => runEvalCases([b.dataset.id]))
+  );
+}
+
+function metricChip(label, value, good) {
+  const cls = good ? 'ok' : 'bad';
+  return `<span class="eval-metric eval-metric-${cls}"><b>${label}</b> ${escHtml(String(value ?? '-'))}</span>`;
+}
+
+function evalRequestBody() {
+  return {
+    model: S.config.model,
+    top_k: parseInt($('topK').value),
+    rerank_top_k: parseInt($('rerankK').value),
+    enable_verification: $('verifyToggle').checked,
+  };
+}
+
+async function runEvalCases(ids) {
+  if (EVAL_RUNNING || !ids.length) return;
+  EVAL_RUNNING = true;
+  EVAL_ABORT = false;
+
+  $('runAllBtn').disabled = true;
+  $('stopEvalBtn').hidden = false;
+  $('evalProgress').hidden = false;
+  $('evalSummary').hidden = true;
+
+  const body = evalRequestBody();
+  let done = 0;
+
+  for (const id of ids) {
+    if (EVAL_ABORT) break;
+
+    EVAL_RESULTS[id] = 'running';
+    $('progressLabel').textContent = `Running ${id} — ${done}/${ids.length} complete`;
+    $('progressFill').style.width = `${Math.round(done / ids.length * 100)}%`;
+    renderEvalCases();
+
+    try {
+      EVAL_RESULTS[id] = await post(`/api/evaluate/cases/${encodeURIComponent(id)}`, body);
+    } catch (err) {
+      EVAL_RESULTS[id] = {
+        id, passed: false, intent_match: false, domain_match: false,
+        error: err.message, latency_ms: 0, behavior_notes: 'Request failed.',
+      };
+    }
+    done++;
+    renderEvalCases();
+  }
+
+  $('progressFill').style.width = '100%';
+  $('progressLabel').textContent = EVAL_ABORT
+    ? `Stopped — ${done}/${ids.length} completed`
+    : `Complete — ${done}/${ids.length}`;
+
+  EVAL_RUNNING = false;
+  $('runAllBtn').disabled = false;
+  $('stopEvalBtn').hidden = true;
+  renderEvalCases();
+  await renderEvalSummary();
+  setTimeout(() => { $('evalProgress').hidden = true; }, 4000);
+}
+
+async function renderEvalSummary() {
+  const rows = Object.values(EVAL_RESULTS).filter(r => r && r !== 'running');
+  const el = $('evalSummary');
+  if (!el || rows.length < 1) return;
+
+  let stats;
+  try {
+    // Aggregated server-side so the scoping rules (faithfulness excludes edge
+    // cases, quality excludes correct refusals) have one implementation.
+    stats = (await post('/api/evaluate/summary', { results: rows })).stats;
+  } catch { return; }
+  if (!stats || !stats.total) return;
+
+  const cats = Object.entries(stats.by_category || {})
+    .map(([c, s]) => `<span class="eval-catstat">${escHtml(c)}: ${s.passed}/${s.total}</span>`).join('');
+
+  el.hidden = false;
+  el.innerHTML = `
+    ${statTile('Pass rate', `${stats.pass_rate}%`, `${stats.passed}/${stats.total}`)}
+    ${statTile('Intent', `${stats.intent_accuracy}%`, 'routing')}
+    ${statTile('Domain', `${stats.domain_accuracy}%`, 'routing')}
+    ${statTile('Faithfulness', stats.avg_faithfulness, 'grounded in sources')}
+    ${statTile('Retrieval hits', stats.avg_retrieval_hit_rate, 'keyword recall')}
+    ${statTile('Citations', stats.avg_citation_accuracy, 'markers valid')}
+    ${statTile('Relevance', stats.avg_answer_relevance, 'answers the question')}
+    ${statTile('Mean latency', `${Math.round(stats.avg_latency_ms)} ms`, 'end to end')}
+    <div class="eval-catstats">${cats}</div>`;
+}
+
+function statTile(label, value, sub) {
+  return `<div class="eval-stat">
+    <div class="eval-stat-val">${escHtml(String(value))}</div>
+    <div class="eval-stat-label">${escHtml(label)}</div>
+    <div class="eval-stat-sub">${escHtml(sub)}</div>
+  </div>`;
 }
 
 // ── Events ─────────────────────────────────────────────
@@ -944,8 +1079,16 @@ function bindEvents() {
   // Preview close
   $('previewClose').addEventListener('click', closePreview);
 
-  // Evaluation — listing only; running the suite is the edupilot-evaluate CLI.
+  // Evaluation
   $('evalFilter')?.addEventListener('input', renderEvalCases);
+  // Run All runs what is *showing*, so filtering first is how you scope a run.
+  $('runAllBtn')?.addEventListener('click', () =>
+    runEvalCases(visibleEvalCases().map(tc => tc.id)));
+  $('stopEvalBtn')?.addEventListener('click', () => {
+    EVAL_ABORT = true;
+    $('stopEvalBtn').disabled = true;
+    $('progressLabel').textContent = 'Stopping after the current case…';
+  });
 
   // Self Study
   bindSSEvents();

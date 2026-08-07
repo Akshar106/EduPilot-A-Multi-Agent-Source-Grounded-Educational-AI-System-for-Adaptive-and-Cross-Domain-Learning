@@ -46,6 +46,8 @@ EXPECTED_ROUTES = {
     ("DELETE", "/api/self-study/sessions/{ss_session_id}/documents/{doc_id}"),
     ("POST", "/api/self-study/chat"),
     ("GET", "/api/evaluate/cases"),
+    ("POST", "/api/evaluate/cases/{case_id}"),
+    ("POST", "/api/evaluate/summary"),
 }
 
 

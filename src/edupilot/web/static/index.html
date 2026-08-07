@@ -257,24 +257,31 @@
             <div class="page-sub">The test cases that validate routing, retrieval, and answer quality.</div>
           </div>
 
-          <div class="eval-cli-note">
-            <strong>Runs from the command line.</strong>
-            A full pass is hundreds of LLM calls and several minutes, so it is an
-            operator action rather than a button.
-            <code>edupilot-evaluate</code>
-            prints a scorecard and exits non-zero if any case fails.
-            <span class="eval-cli-hint">
-              Filter with <code>--category edge-case</code>, <code>--case TC-01</code>,
-              or <code>--model &lt;name&gt;</code>; add <code>--json out.json</code> for raw results.
-            </span>
-          </div>
-
           <div class="eval-toolbar">
+            <button class="btn btn-primary" id="runAllBtn">Run All</button>
+            <button class="btn btn-secondary" id="stopEvalBtn" hidden>Stop</button>
             <input id="evalFilter" class="input" type="search"
                    placeholder="Filter cases by id, name, domain, or category…" />
             <span id="evalCount" class="eval-count"></span>
           </div>
 
+          <div class="eval-cli-note">
+            Each case is several LLM calls, so a full pass takes roughly
+            <strong>25 minutes</strong>. Filter first and press Run All to run
+            only what is showing — <code>edge-case</code> and
+            <code>adversarial</code> are the quick, interesting ones.
+            <span class="eval-cli-hint">
+              Scriptable equivalent: <code>edupilot-evaluate --category edge-case</code>
+              (exits non-zero on failure, <code>--json out.json</code> for raw results).
+            </span>
+          </div>
+
+          <div id="evalProgress" hidden>
+            <div class="progress-bar"><div id="progressFill" class="progress-fill" style="width:0%"></div></div>
+            <div id="progressLabel" class="progress-label"></div>
+          </div>
+
+          <div id="evalSummary" class="eval-summary" hidden></div>
           <div id="evalResults" class="eval-results-list"></div>
         </div>
       </div>

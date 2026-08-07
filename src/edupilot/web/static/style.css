@@ -536,6 +536,47 @@ textarea#queryInput::placeholder { color: var(--text-light); }
 }
 .eval-expect { font-size: 12px; color: var(--text-muted); margin-top: 5px; line-height: 1.5; }
 .eval-empty { font-size: 13px; color: var(--text-muted); padding: 16px; text-align: center; }
+
+/* Run status + per-case metrics */
+.eval-status { font-size: 11px; font-weight: 700; border-radius: 4px; padding: 2px 8px; }
+.eval-pass    { background: #E8F5E9; color: #1B5E20; }
+.eval-fail    { background: #FFEBEE; color: #B71C1C; }
+.eval-running { background: #FFF3E0; color: #E65100; }
+.eval-run-one { margin-left: auto; }
+
+.eval-metrics { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.eval-metric {
+  font-size: 11px; font-family: var(--font-mono);
+  border: 1px solid var(--border); border-radius: 4px; padding: 2px 7px;
+}
+.eval-metric b { font-weight: 600; color: var(--text-muted); margin-right: 3px; }
+.eval-metric-ok  { background: #F1F8F2; }
+.eval-metric-bad { background: #FDF1F1; border-color: #F3C9C9; }
+
+.eval-err {
+  font-size: 12px; color: var(--error); margin-top: 6px;
+  background: #FDF1F1; border-radius: 4px; padding: 6px 8px; line-height: 1.45;
+}
+.eval-preview { margin-top: 6px; }
+.eval-preview summary {
+  font-size: 11px; color: var(--text-muted); cursor: pointer; user-select: none;
+}
+.eval-preview > div {
+  font-size: 12px; line-height: 1.5; margin-top: 6px;
+  background: #F9F9F9; border: 1px solid var(--border);
+  border-radius: 4px; padding: 8px 10px; white-space: pre-wrap;
+}
+
+/* Summary tiles */
+.eval-summary { grid-template-columns: repeat(4, 1fr); }
+.eval-stat-sub { font-size: 10px; color: var(--text-muted); margin-top: 2px; }
+.eval-catstats {
+  grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
+}
+.eval-catstat {
+  background: #F3F4F6; border-radius: 4px; padding: 3px 9px;
+  font-size: 11px; font-weight: 600; color: var(--text-muted);
+}
 .eval-summary { display: grid; grid-template-columns: repeat(3,1fr); gap: 10px; align-items: start; }
 .eval-stat {
   background: #fff; border: 1px solid var(--border);
