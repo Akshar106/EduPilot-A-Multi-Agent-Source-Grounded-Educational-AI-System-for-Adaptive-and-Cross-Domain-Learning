@@ -51,9 +51,11 @@ EduPilot's approach:
 | **Cross-domain synthesis** | Automatically detects multi-domain queries and retrieves from each domain separately |
 | **Out-of-domain guard** | Hard refusal for questions outside AML, ADT, STAT, LLM scope |
 | **Self Study Mode** | Upload any personal documents (PDF, TXT, DOCX) and chat with them privately |
-| **Evaluation suite** | 50 test cases and 8 objective metrics, run via the `edupilot-evaluate` CLI |
+| **Evaluation suite** | 50 test cases and 8 objective metrics — run a case from the Evaluation tab, or the whole suite with `edupilot-evaluate` |
 | **Blue/green indexing** | Rebuilds write to a new index version and promote only on success — a failed rebuild changes nothing |
 | **Auth + guardrails** | JWT auth with per-user ownership, rate limiting, upload validation, and prompt-injection scanning |
+| **Answer cache** | Questions asked 3+ times are cached by semantic match, scoped to the index version and swept on rebuild |
+| **Conversation memory** | Recent turns kept verbatim; older ones fold into a rolling per-session digest |
 | **Model selector** | Switch between Groq (Llama 3.3 70B, Llama 3.1 8B) and Gemini fallback at runtime |
 | **Debug panel** | Real-time view of retrieved chunks, reranking scores, and verification reasoning |
 
