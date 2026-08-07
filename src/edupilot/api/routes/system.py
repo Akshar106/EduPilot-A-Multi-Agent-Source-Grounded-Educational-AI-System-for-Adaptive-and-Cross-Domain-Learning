@@ -25,7 +25,10 @@ async def root():
     index = STATIC_DIR / "index.html"
     if not index.exists():
         return JSONResponse({"service": "EduPilot API", "docs": "/docs"})
-    return FileResponse(str(index))
+    # Always revalidate the entry point. It references app.js and style.css by
+    # unversioned name, so a stale index.html pins the whole frontend to an old
+    # build — the one failure that makes a shipped change look unshipped.
+    return FileResponse(str(index), headers={"Cache-Control": "no-cache"})
 
 
 @router.get("/api/health")

@@ -116,6 +116,33 @@ async def lifespan(app: FastAPI):
 
 
 # ---------------------------------------------------------------------------
+# Static assets
+# ---------------------------------------------------------------------------
+
+
+class _RevalidatingStatic(StaticFiles):
+    """
+    StaticFiles that always revalidates.
+
+    The asset filenames are not content-hashed, so `app.js` after a deploy is
+    the same URL with different bytes. Starlette sets ETag and Last-Modified
+    but no Cache-Control, and with no explicit freshness a browser applies
+    *heuristic* caching — it may serve the old file for minutes without ever
+    asking the server. That is how a shipped frontend change appears not to
+    have shipped.
+
+    `no-cache` does not mean "do not store": the browser keeps the file and
+    revalidates with If-None-Match, so an unchanged asset costs a 304 and no
+    body. Correctness over a few hundred bytes.
+    """
+
+    def file_response(self, *args, **kwargs):  # type: ignore[override]
+        response = super().file_response(*args, **kwargs)
+        response.headers.setdefault("Cache-Control", "no-cache")
+        return response
+
+
+# ---------------------------------------------------------------------------
 # Factory
 # ---------------------------------------------------------------------------
 
@@ -147,7 +174,7 @@ def create_app() -> FastAPI:
         # Absolute path: a relative StaticFiles(directory="static") resolves
         # against the process CWD and breaks whenever the server is started
         # from anywhere but the project root.
-        app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+        app.mount("/static", _RevalidatingStatic(directory=str(STATIC_DIR)), name="static")
 
     _register_middleware(app)
     _register_error_handlers(app)

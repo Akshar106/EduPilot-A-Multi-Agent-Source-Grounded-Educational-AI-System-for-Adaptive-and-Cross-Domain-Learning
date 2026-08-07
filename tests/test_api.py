@@ -143,3 +143,40 @@ def test_register_password_has_a_floor_and_a_bcrypt_ceiling():
     with pytest.raises(ValidationError):
         RegisterRequest(email="a@b.co", password="x" * 73)
     RegisterRequest(email="a@b.co", password="a-long-enough-password")
+
+
+# ---------------------------------------------------------------------------
+# Static assets must revalidate
+# ---------------------------------------------------------------------------
+
+
+def test_frontend_assets_are_never_heuristically_cached(app):
+    """
+    Asset URLs are not content-hashed, so `app.js` after a deploy is the same
+    URL with different bytes. Without an explicit Cache-Control a browser
+    applies heuristic freshness and can serve the old file for minutes — which
+    is indistinguishable from the change never having shipped.
+    """
+    from fastapi.testclient import TestClient
+
+    with TestClient(app) as client:
+        for path in ("/", "/static/app.js", "/static/style.css"):
+            r = client.get(path)
+            assert r.status_code == 200, path
+            assert r.headers.get("cache-control") == "no-cache", (
+                f"{path} would be heuristically cached by browsers"
+            )
+
+
+def test_unchanged_assets_revalidate_cheaply(app):
+    """`no-cache` must still allow a 304 — otherwise it costs a full re-download."""
+    from fastapi.testclient import TestClient
+
+    with TestClient(app) as client:
+        first = client.get("/static/app.js")
+        etag = first.headers.get("etag")
+        assert etag, "no ETag means every revalidation re-sends the body"
+
+        second = client.get("/static/app.js", headers={"If-None-Match": etag})
+        assert second.status_code == 304
+        assert not second.content
