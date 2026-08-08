@@ -30,3 +30,9 @@ venv/
 .DS_Store
 .idea/
 .vscode/
+
+# Deploy seed state: derived artifacts the container needs to serve.
+# bm25.json is the fitted IDF table; index_pointer.json names the live index.
+# Small, and without them a fresh deploy has no index and no lexical search.
+!deploy/seed/
+!deploy/seed/*.json

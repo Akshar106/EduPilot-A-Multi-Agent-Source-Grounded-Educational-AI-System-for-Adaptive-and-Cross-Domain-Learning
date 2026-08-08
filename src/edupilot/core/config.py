@@ -121,30 +121,27 @@ ENV: str = os.getenv("EDUPILOT_ENV", "development").lower()
 IS_PRODUCTION: bool = ENV == "production"
 
 # ---------------------------------------------------------------------------
-# Single-user mode
+# Open mode
 #
-# With auth disabled there is no sign-in: every request resolves to one fixed
-# local identity (see security/deps.LOCAL_USER). This is not the same as
-# removing access control — the ownership model is untouched, and sessions are
-# still written with an owner. It only removes the login step for a local,
-# single-operator install.
+# With auth disabled there is no sign-in. Access control is not removed: each
+# browser is issued its own anonymous identity (security/deps.anonymous_user),
+# sessions are still written with an owner, and every ownership check still
+# runs. What goes away is only the login step.
 #
-# Defaults off in development, on in production, and the guard below makes it
-# impossible to disable in production even by setting the variable: an open
-# knowledge base means any visitor can inject documents that every student's
-# answers are then grounded in.
+# This was previously refused outright in production, because "auth off" then
+# meant every caller shared one *admin* identity — which let any visitor upload
+# into the shared knowledge base and read everyone else's conversations. Both
+# are now addressed directly: identities are per-browser, and anonymous callers
+# are granted the admin role only outside production. So the mode is allowed in
+# production, and the role boundary carries the safety instead of a blanket ban.
+#
+# Requiring sign-in is still the stronger posture and remains the production
+# default; turn it off deliberately when the deployment has no login UI.
 # ---------------------------------------------------------------------------
 AUTH_REQUIRED: bool = (
     os.getenv("EDUPILOT_AUTH_REQUIRED", "true" if IS_PRODUCTION else "false").lower()
     == "true"
 )
-
-if IS_PRODUCTION and not AUTH_REQUIRED:
-    raise RuntimeError(
-        "EDUPILOT_AUTH_REQUIRED=false is refused when EDUPILOT_ENV=production. "
-        "Single-user mode grants every caller admin rights over the shared "
-        "knowledge base."
-    )
 
 # Signing key for JWTs. Required in production; security/auth.py raises at
 # startup rather than falling back to a default, because a predictable signing

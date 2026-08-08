@@ -1,0 +1,42 @@
+# Keep the build context small and free of anything that must not ship.
+#
+# data/ is the big one: the course corpus alone is ~191 MB of copyrighted
+# lecture material, and the SQLite database holds real accounts, chat history
+# and students' private uploads. The container gets its runtime state from
+# deploy/seed/ and a mounted volume instead.
+
+# ── Secrets and runtime data ─────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+data/
+*.db
+*.db-shm
+*.db-wal
+
+# ── Local environments and caches ────────────────────────────────────────────
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# ── Repo metadata not needed at runtime ──────────────────────────────────────
+.git/
+.github/
+.gitignore
+.claude/
+docs/
+tests/
+*.md
+!README.md
+
+# ── Editors and OS ───────────────────────────────────────────────────────────
+.DS_Store
+.idea/
+.vscode/

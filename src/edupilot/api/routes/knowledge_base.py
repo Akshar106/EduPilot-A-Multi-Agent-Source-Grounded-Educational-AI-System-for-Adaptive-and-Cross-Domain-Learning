@@ -120,6 +120,20 @@ async def serve_document(domain: str, filename: str, user: CurrentUser):
     except UploadRejected as exc:
         raise AppError(code=ErrorCode.NOT_FOUND, internal=str(exc)) from exc
     if not path.is_file():
+        # A deployment can serve a pre-built vector index without shipping the
+        # source PDFs — the corpus is ~191 MB of copyrighted course material.
+        # Answers and citations still work; only opening the original file
+        # does not. Say so, rather than returning a bare "not found" that
+        # reads as a bug.
+        if not kb_path.is_dir():
+            raise AppError(
+                code=ErrorCode.NOT_FOUND,
+                message=(
+                    "Source documents are not available in this deployment. "
+                    "The answer and its citations are unaffected."
+                ),
+                internal=f"knowledge base directory absent: {kb_path}",
+            )
         raise AppError(code=ErrorCode.NOT_FOUND, internal=f"missing {path}")
     return FileResponse(str(path), filename=path.name)
 

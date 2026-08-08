@@ -186,6 +186,40 @@ class IndexRegistry:
             ).fetchall()
         return [dict(r) for r in rows]
 
+    def bulk_seed(self, rows: list[dict]) -> int:
+        """
+        Insert registry rows that describe an already-built index.
+
+        For a deployment that serves a pre-built vector index it did not
+        create: the vectors exist remotely, but nothing locally records which
+        documents produced them. Uses INSERT OR IGNORE against the
+        (namespace, filename) unique constraint, so re-running is harmless and
+        a real ingest always wins.
+
+        Returns the number of rows actually inserted.
+        """
+        cols = (
+            "namespace", "filename", "source_path", "content_hash",
+            "chunk_count", "parent_count", "embed_model", "chunker",
+        )
+        payload = [
+            tuple(r.get(c, 0 if c.endswith("_count") else "") for c in cols)
+            for r in rows
+            if r.get("namespace") and r.get("filename")
+        ]
+        if not payload:
+            return 0
+
+        with self._write() as conn:
+            before = conn.execute("SELECT COUNT(*) FROM indexed_documents").fetchone()[0]
+            conn.executemany(
+                f"INSERT OR IGNORE INTO indexed_documents ({', '.join(cols)}) "
+                f"VALUES ({', '.join('?' * len(cols))})",
+                payload,
+            )
+            after = conn.execute("SELECT COUNT(*) FROM indexed_documents").fetchone()[0]
+        return after - before
+
     def all_texts_for_fit(self, namespace: str | None = None) -> list[str]:
         """Filenames are not enough to refit BM25; the caller supplies texts."""
         raise NotImplementedError("BM25 is fitted from chunk texts, not the registry")

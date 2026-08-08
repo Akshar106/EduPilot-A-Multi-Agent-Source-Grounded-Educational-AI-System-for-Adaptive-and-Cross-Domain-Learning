@@ -24,21 +24,35 @@ from .ratelimit import RateLimitExceeded, limiter
 
 logger = logging.getLogger(__name__)
 
-#: The identity every request resolves to when AUTH_REQUIRED is false.
+#: Cookie carrying the anonymous per-browser identity.
 #:
-#: A stable id, not a random one — sessions and study uploads are stored
-#: against it, so it has to survive a restart or the operator's history
-#: disappears. Admin, because a single-user install still needs to manage its
-#: own knowledge base.
-#:
-#: config.py refuses to start with auth disabled in production, so this can
-#: never become the identity of an anonymous internet caller.
-LOCAL_USER = User(
-    user_id="local-single-user",
-    email="local@edupilot.invalid",
-    role=Role.ADMIN,
-    display_name="Local User",
-)
+#: Long-lived and httponly. It holds a random id and nothing else — no claims,
+#: no signature, because it grants nothing beyond "these are my own chats".
+ANON_COOKIE = "edupilot_anon"
+ANON_COOKIE_MAX_AGE = 365 * 24 * 3600
+
+
+def anonymous_user(anon_id: str, *, is_admin: bool) -> User:
+    """
+    Build the identity for a caller who has not signed in.
+
+    One identity per *browser*, not one per deployment. Sharing a single
+    identity across everyone would make `list_sessions` return every
+    visitor's conversations to every other visitor — the ownership checks
+    would all pass, because everyone really would be the same owner.
+
+    The admin role is granted only in development. On a deployment, an
+    anonymous caller with admin rights could upload into the shared knowledge
+    base, and every other visitor's answers would then be grounded in
+    whatever they uploaded. Manage the corpus with `edupilot-reindex`, or
+    sign in with a real admin account.
+    """
+    return User(
+        user_id=f"anon-{anon_id}",
+        email=f"anon-{anon_id}@edupilot.invalid",
+        role=Role.ADMIN if is_admin else Role.STUDENT,
+        display_name="Guest",
+    )
 
 
 def client_ip(request: Request) -> str:
@@ -80,9 +94,9 @@ async def current_user(
 
     When AUTH_REQUIRED is false this never rejects: a valid token still wins,
     so a signed-in operator keeps their own identity, but anything else
-    resolves to LOCAL_USER instead of a 401.
+    resolves to that browser's anonymous identity instead of a 401.
     """
-    from edupilot.core.config import AUTH_REQUIRED
+    from edupilot.core.config import AUTH_REQUIRED, IS_PRODUCTION
 
     token = _bearer_token(authorization) or request.cookies.get("edupilot_access")
 
@@ -94,12 +108,15 @@ async def current_user(
                 raise AppError(
                     code=ErrorCode.UNAUTHENTICATED, message=exc.message, internal=str(exc)
                 ) from exc
-            # Expired or malformed token in single-user mode: fall through
-            # rather than locking the operator out of their own install.
-            logger.debug("ignoring unusable token in single-user mode: %s", exc)
+            # Expired or malformed token with auth off: fall through to the
+            # anonymous identity rather than locking the visitor out.
+            logger.debug("ignoring unusable token in open mode: %s", exc)
 
     if not AUTH_REQUIRED:
-        return LOCAL_USER
+        # Set by the anonymous-identity middleware, which also writes the
+        # cookie back on the response.
+        anon_id = getattr(request.state, "anon_id", "")
+        return anonymous_user(anon_id or "unknown", is_admin=not IS_PRODUCTION)
 
     raise AppError(code=ErrorCode.UNAUTHENTICATED, internal="no token presented")
 

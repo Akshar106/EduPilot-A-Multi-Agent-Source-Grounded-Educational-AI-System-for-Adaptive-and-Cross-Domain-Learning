@@ -15,10 +15,14 @@ Required environment (see .env.example):
 
 from __future__ import annotations
 
+import json
 import logging
+import os
+import secrets
 import time
 import uuid
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -39,6 +43,7 @@ from edupilot.core.config import (
 from edupilot.core.observability import configure_logging, request_id_var
 from edupilot.core.services import services
 from edupilot.security import AppError, AuthError, ErrorCode, Role
+from edupilot.security.deps import ANON_COOKIE, ANON_COOKIE_MAX_AGE
 
 configure_logging()
 logger = logging.getLogger("edupilot.api")
@@ -77,6 +82,37 @@ def _bootstrap_admin() -> None:
         logger.error("could not bootstrap admin: %s", exc)
 
 
+def _seed_document_registry() -> None:
+    """
+    Populate the document registry from shipped seed data, once, when empty.
+
+    The registry records which files are in which namespace. It normally
+    accumulates as documents are indexed, but a fresh deployment serves a
+    pre-built Pinecone index it never indexed itself — so Pinecone reports
+    thousands of chunks while the Knowledge Base tab lists no documents, which
+    reads as broken.
+
+    Only runs against an empty registry, so it can never overwrite the record
+    of a real ingest. Contains course-corpus rows only; per-student namespaces
+    are excluded at export.
+    """
+    seed = Path(os.getenv("SEED_DIR", "/app/deploy/seed")) / "indexed_documents.json"
+    if not seed.is_file():
+        return
+    if services.registry.list_documents():
+        return  # a real ingest happened here; leave it alone
+
+    try:
+        rows = json.loads(seed.read_text())
+    except (OSError, ValueError) as exc:
+        logger.warning("could not read seed registry %s: %s", seed, exc)
+        return
+
+    inserted = services.registry.bulk_seed(rows)
+    if inserted:
+        logger.info("seeded document registry with %d entries", inserted)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     db.init_db()
@@ -95,15 +131,16 @@ async def lifespan(app: FastAPI):
         )
 
     if not AUTH_REQUIRED:
-        from edupilot.security.deps import LOCAL_USER
-
         logger.warning(
-            "single-user mode: authentication is OFF, every request runs as %s "
-            "with admin rights. Set EDUPILOT_AUTH_REQUIRED=true to require sign-in.",
-            LOCAL_USER.user_id,
+            "open mode: sign-in is OFF. Each browser gets its own anonymous "
+            "identity, so conversations stay separate. Anonymous callers are "
+            "%s. Set EDUPILOT_AUTH_REQUIRED=true to require sign-in.",
+            "ADMIN (development)" if not IS_PRODUCTION
+            else "students — knowledge-base writes are refused",
         )
 
     _bootstrap_admin()
+    _seed_document_registry()
 
     health = services.health()
     if health["status"] != "ok":
@@ -186,6 +223,42 @@ def create_app() -> FastAPI:
 
 
 def _register_middleware(app: FastAPI) -> None:
+    @app.middleware("http")
+    async def anonymous_identity(request: Request, call_next):
+        """
+        Give every browser its own identity when sign-in is disabled.
+
+        Without this, all unauthenticated callers would share one user id, and
+        the ownership checks — which are working correctly — would happily show
+        each visitor everyone else's conversations, because they really would
+        all be the same owner.
+
+        The cookie carries a random id and nothing else. It authorizes nothing
+        beyond "these are my own chats", so it is not signed; forging one gets
+        you a different empty session list.
+        """
+        if AUTH_REQUIRED:
+            return await call_next(request)
+
+        anon_id = request.cookies.get(ANON_COOKIE, "")
+        issued = False
+        if not anon_id or len(anon_id) < 16 or not anon_id.isalnum():
+            anon_id = secrets.token_hex(16)
+            issued = True
+        request.state.anon_id = anon_id
+
+        response = await call_next(request)
+        if issued:
+            response.set_cookie(
+                ANON_COOKIE,
+                anon_id,
+                httponly=True,
+                secure=IS_PRODUCTION,
+                samesite="lax",
+                max_age=ANON_COOKIE_MAX_AGE,
+            )
+        return response
+
     @app.middleware("http")
     async def request_context(request: Request, call_next):
         """Attach a request id to every log line and response."""
