@@ -1,0 +1,63 @@
+# Fly.io configuration for EduPilot.
+#
+# Create the app and volume once (see deploy/README.md), then every green push
+# to main deploys automatically via .github/workflows/deploy.yml.
+
+app = "edupilot"
+primary_region = "ord"          # change to the region nearest your users
+
+[build]
+  # The image is built and published by CI; Fly pulls it rather than rebuilding.
+  # The workflow overrides this with the exact digest it just pushed.
+  image = "ghcr.io/akshar106/edupilot:latest"
+
+[env]
+  EDUPILOT_ENV = "production"
+  # The bundled frontend has no login screen, so sign-in is off and each
+  # browser gets its own anonymous identity. Anonymous callers are students in
+  # production, so knowledge-base writes are refused.
+  EDUPILOT_AUTH_REQUIRED = "false"
+  EDUPILOT_DATA_DIR = "/data"
+  PORT = "7860"
+
+# Accounts, chat history and the document registry live in SQLite on this
+# volume. Without it every restart wipes them; the Pinecone index is unaffected
+# either way.
+[[mounts]]
+  source = "edupilot_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 7860
+  force_https = true
+
+  # Scale to zero when idle — this is a demo, not a service with traffic.
+  # The tradeoff is that the first request after a sleep pays ~20s loading
+  # 1.1 GB of models. Set min_machines_running = 1 if a cold start during a
+  # live demo is unacceptable; that costs roughly a dollar a week more.
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [http_service.concurrency]
+    type = "requests"
+    # One worker, and a chat request occupies it for 20-45s. Queueing beyond
+    # this just times out clients, so push back early instead.
+    soft_limit = 4
+    hard_limit = 8
+
+# The app is unhealthy until the models finish loading, which is why
+# grace_period is generous. A shorter one makes Fly kill the machine mid-boot
+# and retry forever.
+[[http_service.checks]]
+  interval = "30s"
+  timeout = "10s"
+  grace_period = "120s"
+  method = "GET"
+  path = "/api/health"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  # 1.1 GB resident with both models loaded, plus request headroom. 1 GB OOMs
+  # on the first query.
+  memory = "2gb"

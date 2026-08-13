@@ -70,7 +70,79 @@ has registration, login, refresh, logout and per-user ownership.
 In development the anonymous identity is granted admin, so the operator can use
 the Knowledge Base tab locally. That is why production must not grant it.
 
-## Hugging Face Spaces
+## CI/CD — GitHub Actions to Fly.io
+
+```
+push / PR ──► CI ──► lint · 172 tests · docker build + container smoke test
+                 │
+     main only   └──► Deploy ──► push image to GHCR ──► flyctl deploy ──► verify /api/health
+```
+
+`CI` runs on every push and pull request. `Deploy` triggers on `workflow_run`,
+so it waits for CI to conclude and then checks it actually *succeeded* — a
+plain `push` trigger would race the test job and could ship a red build.
+
+Fly is deployed by digest (`:${{ github.sha }}`), not `:latest`, so a rollback
+is `flyctl deploy --image ghcr.io/<owner>/<repo>:<old-sha>` and a re-run cannot
+silently pick up a newer image.
+
+### One-time setup
+
+1. **Create the app and volume.** From the repo root, with
+   [flyctl](https://fly.io/docs/flyctl/install/) installed:
+
+   ```bash
+   flyctl auth login
+   flyctl apps create edupilot              # must match `app` in fly.toml
+   flyctl volumes create edupilot_data --size 1 --region ord
+   ```
+
+   Without the volume, accounts and chat history reset on every restart. The
+   Pinecone index is unaffected either way.
+
+2. **Set the runtime secrets on Fly** (these are for the *running app*):
+
+   ```bash
+   flyctl secrets set \
+     GROQ_API_KEY=... \
+     PINECONE_API_KEY=... \
+     JWT_SECRET_KEY="$(python -c 'import secrets; print(secrets.token_urlsafe(48))')" \
+     GEMINI_API_KEY=... \
+     CORS_ALLOWED_ORIGINS=https://edupilot.fly.dev
+   ```
+
+3. **Set one secret on GitHub** (this is for the *pipeline*):
+
+   Settings → Secrets and variables → Actions → New repository secret
+
+   | Secret | Value |
+   |---|---|
+   | `FLY_API_TOKEN` | `flyctl tokens create deploy -x 999999h` |
+
+   GHCR needs no secret — `GITHUB_TOKEN` is provided automatically.
+
+4. **Push to main.** CI runs, then Deploy publishes and rolls out.
+
+### What CI proves
+
+The Docker job does not merely build the image — it runs the container and
+curls it, because a build that succeeds and a container that serves are
+different claims. It boots with no provider keys, so health reports `degraded`;
+that is expected. What is asserted is that the container starts, seeds its
+volume, and answers on the HTTP port.
+
+The test job needs no secrets at all: `conftest.py` pins `EDUPILOT_DATA_DIR` at
+a temp directory and nothing in the suite calls a provider. If a test ever
+needs an API key, that test is reaching the network and should be rewritten.
+
+### Cost and cold starts
+
+`fly.toml` sets `min_machines_running = 0`, so the machine sleeps when idle and
+an idle demo costs almost nothing. The tradeoff is that the first request after
+a sleep pays roughly 20 seconds loading 1.1 GB of models. Before a live demo,
+either warm it with one request or set `min_machines_running = 1`.
+
+## Hugging Face Spaces (alternative)
 
 1. Create a Space — **SDK: Docker**, hardware **CPU basic** (free).
 

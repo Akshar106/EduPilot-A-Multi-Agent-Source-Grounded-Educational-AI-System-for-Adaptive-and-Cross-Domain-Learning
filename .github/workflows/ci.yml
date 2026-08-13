@@ -1,0 +1,116 @@
+name: CI
+
+# Every push and pull request. This is the gate that must stay green; the
+# release workflow only runs after it passes.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  # A newer push supersedes an in-flight run on the same ref.
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # 3.11 matches the Dockerfile base image, so CI exercises the interpreter
+  # production actually runs rather than whatever is newest.
+  PYTHON_VERSION: "3.11"
+
+jobs:
+  test:
+    name: lint and test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          # CPU wheel explicitly. The default index resolves the CUDA build —
+          # several GB of libraries a GitHub runner cannot use, and slow enough
+          # to dominate the job.
+          pip install --index-url https://download.pytorch.org/whl/cpu torch
+          pip install -e ".[dev]"
+
+      - name: Lint
+        run: ruff check src tests
+
+      - name: Test
+        # No secrets: conftest pins EDUPILOT_DATA_DIR at a temp directory and
+        # nothing in the suite calls a provider. If a test ever needs a key,
+        # that test is reaching the network and should be rewritten.
+        run: pytest -q
+
+      - name: Verify the package installs clean and imports cheaply
+        run: |
+          python -c "
+          import sys, edupilot
+          heavy = [m for m in ('torch', 'sentence_transformers', 'pinecone') if m in sys.modules]
+          assert not heavy, f'importing edupilot eagerly loaded {heavy}'
+          print('edupilot', edupilot.__version__)
+          "
+
+  docker:
+    name: build image
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    # Only after the suite is green — a broken build is not worth 20 minutes
+    # of model downloads to discover.
+    needs: test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: edupilot:ci
+          # Layer cache in GitHub Actions cache. The model-bake layer is ~1.2 GB
+          # and changes only when the model ids do, so subsequent runs skip it.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke test the image
+        # Proves the container actually serves, not merely that it builds.
+        # No API keys, so health reports degraded — that is expected and fine;
+        # what matters is that it boots, seeds and answers on the HTTP port.
+        run: |
+          docker run -d --name edupilot-ci -p 7860:7860 \
+            -e JWT_SECRET_KEY=ci-only-not-a-real-secret-0123456789abcdef \
+            edupilot:ci
+
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:7860/api/health >/dev/null 2>&1; then
+              echo "container is serving"
+              break
+            fi
+            if [ "$i" = "60" ]; then
+              echo "::error::container never became healthy"
+              docker logs edupilot-ci
+              exit 1
+            fi
+            sleep 5
+          done
+
+          echo "--- seeding and startup ---"
+          docker logs edupilot-ci 2>&1 | grep -E "seeded|startup|open mode" || true
+
+          echo "--- the frontend is served ---"
+          curl -fsS -o /dev/null -w "  GET / -> %{http_code}\n" http://127.0.0.1:7860/
+          curl -fsS -o /dev/null -w "  GET /static/app.js -> %{http_code}\n" http://127.0.0.1:7860/static/app.js
+
+          docker rm -f edupilot-ci
