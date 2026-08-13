@@ -55,7 +55,11 @@ RUN pip install --index-url https://download.pytorch.org/whl/cpu torch
 
 COPY pyproject.toml README.md ./
 COPY src/edupilot/__init__.py src/edupilot/__init__.py
-RUN pip install -e . && pip cache purge
+# No `pip cache purge` here: PIP_NO_CACHE_DIR=1 above already prevents a
+# cache from existing, and purging a disabled cache exits 1 —
+# "pip cache commands can not function since cache is disabled" — which
+# fails the layer even though the install succeeded.
+RUN pip install -e .
 
 # ---------------------------------------------------------------------------
 # Bake the models
