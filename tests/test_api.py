@@ -57,11 +57,40 @@ def app():
 
 
 def _routes(app) -> set[tuple[str, str]]:
-    found = set()
-    for route in app.routes:
-        for method in getattr(route, "methods", None) or ():
-            if method not in ("HEAD", "OPTIONS"):
-                found.add((method, route.path))
+    """
+    Every (method, path) the app serves, including routes nested in routers.
+
+    FastAPI 0.141 / Starlette 1.6 stopped flattening `include_router` into
+    `app.routes`. It now inserts an `_IncludedRouter` wrapper whose own `path`
+    is None and which exposes the router as `original_router` rather than
+    `.routes`. A flat walk therefore sees only `/docs` and `/openapi.json` and
+    reports every route as missing — while the app serves all of them.
+
+    Handling both shapes keeps this working across versions rather than
+    pinning one.
+    """
+    found: set[tuple[str, str]] = set()
+    seen: set[int] = set()
+
+    def walk(routes) -> None:
+        for route in routes or ():
+            if id(route) in seen:
+                continue
+            seen.add(id(route))
+
+            path = getattr(route, "path", None)
+            for method in getattr(route, "methods", None) or ():
+                if method not in ("HEAD", "OPTIONS") and path:
+                    found.add((method, path))
+
+            # Mounts expose `.routes`; included routers expose the router they
+            # wrapped. Router paths already carry their prefix.
+            walk(getattr(route, "routes", None))
+            wrapped = getattr(route, "original_router", None)
+            if wrapped is not None:
+                walk(getattr(wrapped, "routes", None))
+
+    walk(app.routes)
     return found
 
 
