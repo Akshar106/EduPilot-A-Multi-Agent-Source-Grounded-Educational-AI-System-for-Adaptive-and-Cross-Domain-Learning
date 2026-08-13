@@ -82,9 +82,30 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Is a Fly target configured?
+        id: check
+        # Hosting is optional: publishing the image to GHCR is the deliverable,
+        # and rolling it out somewhere is a separate choice. Without a token
+        # this skips rather than fails — a red X on every push would report a
+        # broken pipeline when nothing is broken.
+        #
+        # Checked in a step rather than `jobs.<id>.if` because the `secrets`
+        # context is not available in job-level conditions.
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          if [ -n "$FLY_API_TOKEN" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Rollout skipped::FLY_API_TOKEN is not set. The image was published to GHCR and can be pulled or deployed anywhere; set the secret to enable automatic rollout."
+          fi
+
       - uses: superfly/flyctl-actions/setup-flyctl@master
+        if: steps.check.outputs.configured == 'true'
 
       - name: Deploy
+        if: steps.check.outputs.configured == 'true'
         # Pinned to the exact commit's image rather than :latest, so a rollback
         # is `flyctl deploy --image <old-sha>` and a re-run cannot silently pick
         # up a newer build.
@@ -97,6 +118,7 @@ jobs:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 
       - name: Verify the rollout actually serves
+        if: steps.check.outputs.configured == 'true'
         # A successful deploy command is not proof the app works. Fly reports
         # success once machines start; this checks the app answers.
         run: |
